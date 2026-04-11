@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cortex-agent"
+version = "0.1.0"
+description = "Active executive-control and reflection layer for AI coding agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Cortex contributors"}]
+keywords = ["agent", "memory", "llm", "claude-code", "hooks", "tripwires"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.3.0",
+]
+
+[project.scripts]
+cortex = "cortex.cli:main"
+cortex-hook = "cortex.hook:main"
+cortex-watch = "cortex.watch:main"
+cortex-check-lookahead = "cortex.verifiers.check_feature_lookahead:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cortex*"]
+
+[tool.setuptools.package-data]
+cortex = ["rules/*.yml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+ignore = ["E501", "SIM103"]  # SIM103: explicit `return False / return True` is clearer than inverted booleans
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

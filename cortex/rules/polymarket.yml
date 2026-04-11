@@ -1,0 +1,76 @@
+# Polymarket-specific classification rules.
+#
+# Each rule is matched against the tokenized user prompt. A rule fires when
+# AT LEAST ONE `match_any` token AND AT LEAST ONE `and_any` token are present.
+# When a rule fires, its `inject` tripwires are added to the brief.
+#
+# Keep rules narrow and high-precision. It is better to miss a task than to
+# spam the agent with irrelevant warnings (silent violations kill trust).
+
+rules:
+  - id: poly_backtest_task
+    description: "Polymarket backtest / replay / walkforward"
+    match_any: [backtest, backtester, replay, walkforward, simulate, eval]
+    and_any: [poly, polymarket, slot, clob, 5m, "5-min"]
+    inject:
+      - poly_fee_empirical
+      - lookahead_parquet
+      - real_entry_price
+      - backtest_must_match_prod
+
+  - id: poly_directional_5m
+    description: "Directional 5m Polymarket strategy / signal"
+    match_any: [directional, direction, signal, predict, prediction, forecast, trend, momentum]
+    and_any: [5m, "5-min", slot, poly, polymarket]
+    inject:
+      - directional_5m_dead
+      - information_decay_5m
+      - adverse_selection_maker
+      - real_entry_price
+      - poly_fee_empirical
+
+  - id: poly_live_deploy
+    description: "Live bot deployment on Polymarket"
+    match_any: [live, deploy, production, prod, "go-live"]
+    and_any: [bot, poly, polymarket, strategy]
+    inject:
+      - never_single_strategy
+      - backtest_must_match_prod
+      - no_budget_paper
+      - poly_fee_empirical
+      - lookahead_parquet
+
+  - id: poly_maker_entry
+    description: "Maker limit orders on Polymarket"
+    match_any: [maker, limit, pierce, "inside-spread"]
+    and_any: [poly, polymarket, 5m, slot, fill, bid]
+    inject:
+      - adverse_selection_maker
+      - poly_fee_empirical
+      - late_lock_replay_traps
+
+  - id: poly_late_lock
+    description: "Late-lock / tail / extreme-price Polymarket plays"
+    match_any: [late_lock, "late-lock", favorite, extreme, tail, resolution]
+    and_any: [poly, polymarket, slot, lock]
+    inject:
+      - late_lock_replay_traps
+      - poly_fee_empirical
+      - adverse_selection_maker
+
+  - id: poly_lag_arb
+    description: "Binance->Polymarket lag-arb / lead-lag proposal"
+    match_any: [lag, lag-arb, lag_arb, "lead-lag", binance]
+    and_any: [poly, polymarket, forward, arb, signal]
+    inject:
+      - lag_arb_slippage_kill
+      - poly_fee_empirical
+      - adverse_selection_maker
+
+  - id: poly_fee_pnl
+    description: "Any mention of Polymarket fees or PnL calculation"
+    match_any: [fee, fees, pnl, taker, base_fee]
+    and_any: [poly, polymarket, clob, backtest, replay]
+    inject:
+      - poly_fee_empirical
+      - real_entry_price

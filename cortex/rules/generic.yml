@@ -1,0 +1,24 @@
+# Generic classification rules that apply across domains.
+
+rules:
+  - id: paper_trading_config
+    description: "Paper trading configuration (budget / caps / concurrency)"
+    match_any: [paper, "paper-trading"]
+    and_any: [budget, max_slot_cost, max_concurrent, config, cap, slot_cost]
+    inject:
+      - no_budget_paper
+
+  - id: backtest_vs_prod_match
+    description: "User asking to compare backtest vs production config"
+    match_any: [backtest, backtester, replay]
+    and_any: [prod, production, live, match, config, cap, risk]
+    inject:
+      - backtest_must_match_prod
+      - lookahead_parquet
+
+  - id: feature_pipeline_work
+    description: "Work on feature pipelines / parquets (lookahead risk zone)"
+    match_any: [feature, features, parquet, detector, backfill]
+    and_any: [slot, backtest, replay, build, generate, pipeline]
+    inject:
+      - lookahead_parquet
