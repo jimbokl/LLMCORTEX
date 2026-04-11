@@ -36,8 +36,8 @@ How to apply: (1) <concrete action>. (2) <concrete action>. (3) <edge case>.
 
 - **Specific numbers**: *"Polymarket net fee = 0.072 × min(p, 1−p) × size,
   NOT 10% flat. At mid prices net fee ~3.6% per side; at extremes <0.4%."*
-- **Quantified past cost**: *"Bot3+bot4 live 2026-04-10 — backtest 100%/98.6%
-  WR, real 69.6%/74.4%, −$7.78 loss in 82 min auto-killed on 3rd loss."*
+- **Quantified past cost**: *"Bots deployed live — backtest showed near-100%
+  WR, real WR 69.6%/74.4%, auto-killed on 3rd consecutive loss."*
 - **Actionable steps**: *"(1) Before any backtest, run a SHIFT TEST — replay
   with the feature shifted back one slot. If WR drops >10pp, it contains
   lookahead. (2) 100% WR on >100 trades is ALWAYS suspect — first

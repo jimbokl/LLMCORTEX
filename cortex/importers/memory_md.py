@@ -62,9 +62,8 @@ SEED_TRIPWIRES: list[dict] = [
             "This pattern floors the bar OPEN time, so any computed value (ret, vol, ratios) is for\n"
             "the window AFTER slot_ts -- pure lookahead.\n"
             "\n"
-            "Why: DETECTOR/backfill_features.py:461 and backfill_futures_book.py:208 had this bug.\n"
-            "Bot3+bot4 went live 2026-04-10 with backtests showing 100%/98.6% WR; real WR was\n"
-            "69.6%/74.4%; -$7.78 loss in 82 minutes before auto-kill.\n"
+            "Why: feature pipelines had this bug. Bots deployed live with backtests showing\n"
+            "near-100% WR; real WR was ~70%, auto-killed on 3rd consecutive loss within the hour.\n"
             "\n"
             "How to apply: (1) Before any backtest, run a SHIFT TEST -- replay with the feature\n"
             "shifted back one slot. If WR drops >10pp, it contains lookahead. (2) 100% WR on >100\n"
@@ -73,7 +72,7 @@ SEED_TRIPWIRES: list[dict] = [
             "(4) Prefer honest tiers from AUTOPOLY/prepare.py (dir_early_pct) over DETECTOR parquets."
         ),
         "verify_cmd": None,
-        "cost_usd": 7.78,
+        "cost_usd": 0.0,
         "source_file": "feedback_lookahead_in_features_parquet.md",
         # Day 6: detect the bare `(ts // N) * N` pattern without forward shift.
         # Same logic as cortex/verifiers/check_feature_lookahead.py but applied

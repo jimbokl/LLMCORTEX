@@ -17,23 +17,19 @@
 
 ---
 
-## The $7.78 incident
+## The problem
 
-On **2026-04-10**, a live trading bot was deployed after a backtest that showed
-**152 out of 152 winning trades**. It ran for 82 minutes, made 4 trades, lost
-$7.78, and auto-killed itself on the third consecutive loss.
+AI coding agents have no institutional memory. Your vector store knows
+about the fee formula, the lookahead bug, the dead-zone hypothesis — but
+the agent has to *think to ask*, and usually doesn't. By the time the
+agent realizes "I should have checked that first", the mistake is already
+in the commit, or worse, in the live trade.
 
-The bug was a one-line lookahead error in the feature pipeline. The backtest
-lied because it computed features using the same bugged code as the live
-system. 100% WR in simulation became 69.6% in reality. $174 paper profit
-became a $1.30 loss.
-
-**The forensic report documenting the bug was written 2.5 hours after the kill.**
-
-Memory didn't fail. There was *nothing in memory to fail with*. The agent
-was blind to a lesson that didn't yet exist.
-
-**Cortex is the system we built so that never happens again.**
+**Cortex makes memory active.** A Claude Code hook intercepts every prompt,
+classifies it against a curated tripwire store, and injects the matched
+lessons into the agent's working context *before* it reasons about the
+task. The lessons get in front of the agent at the one moment that
+matters — before work starts.
 
 ---
 
@@ -91,20 +87,20 @@ SYNTHESIS (cumulative cost from matched tripwires):
 The following lessons apply to this task. Each cost real money or
 research time in the past. Read them before committing to an approach:
 
-[1] poly_fee_empirical  --  CRITICAL (past cost $500.00)
+[1] poly_fee_empirical  --  CRITICAL
     Polymarket net fee = 0.072 x min(p, 1-p) x size  -  NOT 10% flat
     ...
 
-[2] lookahead_parquet  --  CRITICAL (past cost $7.78)
-    Feature parquets must be computable STRICTLY before decision time
+[2] real_entry_price  --  CRITICAL
+    Use real up_ask/dn_ask entry -- never $0.50 midpoint (33x inflation)
     ...
 </cortex_brief>
 ```
 
 This is not a mock. It's the literal stdout of `cortex-hook` fed a real
 research prompt. The `19.65pp` number is computed at runtime by summing
-three cost components tied to three separate tripwires. That computation
-is the bit that would have saved $7.78 on April 10.
+three cost components tied to three separate tripwires. The synthesizer
+is what turns "here are some lessons" into "here is the blocking number."
 
 ---
 
@@ -394,9 +390,9 @@ It's running live in one production project (the Polymarket research repo where 
 
 The 13 tripwires shipped in [`cortex/importers/memory_md.py`](cortex/importers/memory_md.py)
 are **real lessons** from a Polymarket trading research project where
-Cortex was born. They reference specific past failures — a $7.78 live bot
-loss, a misread fee formula, a dead-zone trading hypothesis, a $57
-single-strategy bleed, a $201 survivorship-biased paper test.
+Cortex was born. They reference specific past research failures: a misread
+fee formula, a dead-zone trading hypothesis, a lookahead bug in a feature
+pipeline, a single-strategy bleed, a survivorship-biased paper test.
 
 They're included as **concrete working examples of the tripwire format**,
 not as rules for your project. Write your own. The examples are there so
@@ -434,7 +430,7 @@ MIT. See [LICENSE](LICENSE).
 
 <div align="center">
 
-*Built after a bot lost $7.78 because the agent didn't know what it
-didn't know. If that's ever happened to you, Cortex is for you.*
+*Built because the agents we trust to reason about our code have no
+institutional memory of what blew up last week. Cortex gives them one.*
 
 </div>

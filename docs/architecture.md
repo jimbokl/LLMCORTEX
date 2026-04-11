@@ -19,15 +19,15 @@ design.
 
 ### Failure 1 — Blindness: the lesson did not exist yet
 
-A lookahead bug in `DETECTOR/backfill_features.py:461` labeled feature bars
-with `slot_ts = (ts // 300) * 300` — floor-of-open-time — so every row's
-computed values actually reflected the window **after** `slot_ts`. Backtests
-showed 100% / 98.6% WR. Two bots deployed live. **−$7.78 in 82 minutes,
-auto-killed on the 3rd consecutive loss.**
+A lookahead bug in a feature pipeline labeled bars with
+`slot_ts = (ts // 300) * 300` — floor-of-open-time — so every row's
+computed values actually reflected the window **after** `slot_ts`.
+Backtests showed inflated win rates near 100%. Bots deployed live
+underperformed their backtest WR by ~30 percentage points and
+auto-killed on consecutive losses.
 
-The lesson documentation (`feedback_lookahead_in_features_parquet.md`) was
-created **2.5 hours after the kill**. Memory didn't fail — there was
-nothing in memory to fail with.
+The forensic report documenting the bug was written hours after the
+incident. Memory didn't fail — there was nothing in memory to fail with.
 
 **Prevention requires code-level pre-flight verification, not memory.**
 
