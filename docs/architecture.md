@@ -324,14 +324,34 @@ injection *effectiveness*. Day 7+ can tune rules and bodies based on
 which tripwires have high violation rates (ignored by the agent) vs low
 (applied).
 
-## Roadmap (Day 7+)
+## Day 7 (shipped) — pre-flight verifier auto-run
+
+The `verify_cmd` field on a tripwire has existed since Day 1, but until
+Day 7 it was documentation only — a command the user could run by hand.
+Day 7 wires it into the hook path: when a critical tripwire matches, the
+hook runs `verify_cmd` with safety rails and appends the result to the
+brief. "This is a known bug" becomes "this is a known bug AND your current
+code has 3 instances of it right now — fix before proceeding."
+
+Opt-in via `CORTEX_VERIFY_ENABLE=1`. Allow-list guards commands against
+the prefix list `cortex-` / `python -m cortex` by default so that a
+legacy `verify_cmd` pointing at a destructive binary (e.g. a real trade
+executor) can't accidentally run. `shlex.split` + `shell=False` +
+3-second hard timeout + captured-output truncation. Any exception
+results in a `skipped` marker — the hook never crashes.
+
+See [hooks.md#environment-variables](hooks.md#environment-variables) for
+the full env var reference.
+
+## Roadmap (Day 8+)
 
 1. **Weekly reflection loop (DMN)** — cheap LLM (Haiku) processes session
    logs and proposes new tripwires to an inbox for human approval
-2. **Verifier auto-run from hook** — critical tripwires with `verify_cmd`
-   run the command live during hook invocation; block on verifier failure
-3. **Inbox workflow** — `cortex inbox list/approve/reject` for DMN-proposed
+2. **Inbox workflow** — `cortex inbox list/approve/reject` for DMN-proposed
    tripwire drafts
-4. **Pattern authoring helper** — `cortex suggest-patterns <tripwire_id>`
+3. **Pattern authoring helper** — `cortex suggest-patterns <tripwire_id>`
    that reads session logs and proposes regex candidates from observed
    tool calls that the user retroactively marks as violations
+4. **Verifier blocking mode** — when a `critical` pre-flight verifier
+   fails, return a non-zero exit from the hook so Claude Code surfaces a
+   hard stop rather than advisory context

@@ -167,7 +167,7 @@ single SQLite store, each targeting a different failure mode:
 | 1 | **Classify** (YAML rules) | *What is this task about, and which lessons apply?* |
 | 2 | **Synthesize** (cost sums) | *Do the drags of the matched lessons exceed any plausible edge?* |
 | 3 | **Fallback** (TF-IDF over bodies) | *Did the rule engine miss due to a vocabulary gap?* |
-| 4 | **Verify** (code grep) | *Is the bug from incident X still present in the current codebase?* |
+| 4 | **Verify** (code grep, auto-run in hook) | *Is the bug from incident X still present in the current codebase right now?* |
 | 5 | **Audit** (jsonl session log) | *What lessons got injected in this session? What tool calls happened?* |
 | 6 | **Detect** (runtime regex) | *Did the agent act on the warning, or silently ignore it?* |
 
@@ -407,17 +407,28 @@ backtest-vs-prod comparison, feature pipelines).
 
 ## Roadmap
 
-**Day 7+** (not yet shipped):
+**Day 7 — shipped**:
+
+- **Pre-flight verifier auto-run from hook** — critical tripwires with
+  `verify_cmd` run during injection, opt-in via `CORTEX_VERIFY_ENABLE=1`,
+  allow-list guarded (`cortex-*` / `python -m cortex` prefixes by default),
+  3-second hard timeout, `shell=False`, captured output truncated,
+  fail-safe on any error. Results appear at the top of the brief with
+  `[OK]` / `[FAIL]` / `[SKIP]` status. Static warnings become "the bug is
+  present in your current code RIGHT NOW."
+
+**Day 8+** (not yet shipped):
 
 - **Weekly DMN reflection loop** — cheap LLM (Haiku) processes session
   logs and proposes new tripwires to an inbox for human approval
-- **Verifier auto-run from hook** — critical tripwires with `verify_cmd`
-  run the command live during hook invocation; block on failure
+- **Inbox workflow** — `cortex inbox list / approve / reject` for
+  DMN-proposed drafts
 - **Pattern authoring helper** — `cortex suggest-patterns <tripwire_id>`
   reads session logs and proposes regex candidates from observed
   violations the user retroactively marks
-- **Inbox workflow** — `cortex inbox list / approve / reject` for
-  DMN-proposed drafts
+- **Verifier blocking mode** — when a `critical` pre-flight verifier
+  fails, return a non-zero hook exit so Claude Code surfaces a hard
+  stop rather than advisory context
 - **PyPI release**
 
 ---

@@ -71,7 +71,10 @@ SEED_TRIPWIRES: list[dict] = [
             "it is perfect'. (3) Walk-forward does NOT save you -- the hold-out has the same bug.\n"
             "(4) Prefer honest tiers from AUTOPOLY/prepare.py (dir_early_pct) over DETECTOR parquets."
         ),
-        "verify_cmd": None,
+        # Day 7: auto-run when CORTEX_VERIFY_ENABLE=1. cortex-check-lookahead
+        # exits 0 gracefully if DETECTOR/ does not exist in CWD, so this is
+        # safe to ship as a seed default even for users whose layout differs.
+        "verify_cmd": "cortex-check-lookahead --features-dir DETECTOR",
         "cost_usd": 0.0,
         "source_file": "feedback_lookahead_in_features_parquet.md",
         # Day 6: detect the bare `(ts // N) * N` pattern without forward shift.

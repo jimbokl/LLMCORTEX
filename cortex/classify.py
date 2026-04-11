@@ -161,6 +161,15 @@ def render_brief(result: dict[str, Any]) -> str:
             lines.append(f"    >> {s['message']}")
             lines.append("")
 
+    # Day 7: pre-flight verifier results (opt-in via CORTEX_VERIFY_ENABLE=1)
+    verifier_results = result.get("verifier_results") or []
+    if verifier_results:
+        try:
+            from cortex.verify_runner import render_verifier_block
+            lines.extend(render_verifier_block(verifier_results))
+        except Exception:
+            pass
+
     lines.append(
         "The following lessons apply to this task. Each cost real money or"
     )

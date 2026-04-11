@@ -40,9 +40,17 @@ def main() -> int:
             return 0
 
         from cortex.classify import classify_prompt, render_brief
+        from cortex.verify_runner import run_verifiers_for
 
         result = classify_prompt(prompt)
         session_id = payload.get("session_id", "") or ""
+
+        # Day 7: optional pre-flight verification for critical tripwires.
+        # Opt-in via CORTEX_VERIFY_ENABLE=1. Fail-safe on any runner error.
+        try:
+            result["verifier_results"] = run_verifiers_for(result["tripwires"])
+        except Exception:
+            result["verifier_results"] = []
 
         if not result["tripwires"]:
             # Rule engine miss -- fall back to in-process keyword scoring.
@@ -114,6 +122,10 @@ def main() -> int:
                     "matched_rules": result["matched_rules"],
                     "tripwire_ids": [t["id"] for t in result["tripwires"]],
                     "synthesis_ids": [s["id"] for s in result.get("synthesis") or []],
+                    "verifier_ids": [
+                        v.get("tripwire_id", "")
+                        for v in result.get("verifier_results") or []
+                    ],
                 },
             )
         except Exception:

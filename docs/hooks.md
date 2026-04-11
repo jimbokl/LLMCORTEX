@@ -145,6 +145,8 @@ detection, injection-hit-rate analysis, cold-tripwire detection.
 
 ## Environment variables
 
+### Core
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `CORTEX_DB` | walk-up + `.cortex/store.db` | Absolute path to the SQLite store |
@@ -152,6 +154,34 @@ detection, injection-hit-rate analysis, cold-tripwire detection.
 
 Set these if you need Cortex to use a store outside the current project
 tree (e.g. a shared store across multiple repos, or a custom layout).
+
+### Day 7 — pre-flight verifier auto-run
+
+`cortex-hook` can optionally execute each matched critical tripwire's
+`verify_cmd` during injection, appending results to the brief. This
+turns static warnings into "the bug is present in your current code
+RIGHT NOW". **Disabled by default** — opt in with the env vars below.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CORTEX_VERIFY_ENABLE` | (unset) | Set to `1` to enable pre-flight verifier execution at hook time |
+| `CORTEX_VERIFY_TIMEOUT` | `3` | Hard timeout in seconds per verifier command |
+| `CORTEX_VERIFY_PREFIXES` | `cortex-,python -m cortex` | Comma-separated allow-list of command prefixes. Commands not matching any prefix are skipped with a `not allow-listed` marker. |
+| `CORTEX_VERIFY_ALLOW_ANY` | (unset) | **DANGER** — set to `1` to disable the allow-list entirely and run any `verify_cmd`. Only use if you wrote every tripwire yourself and know every command is safe. |
+
+Safety rules that always apply (not configurable):
+
+- Only `critical` severity tripwires are ever considered
+- Commands are parsed with `shlex.split` and executed with `shell=False`
+- `stdout` truncated to 500 chars, `stderr` to 200 chars
+- Any exception (timeout, OSError, parse error) results in a `skipped`
+  marker — the hook never crashes, the brief still injects
+
+**Recommended usage**: start with `CORTEX_VERIFY_ENABLE=1` only, keep the
+default allow-list, write your critical tripwire verifiers as entries
+under `cortex/verifiers/` with a `cortex-*` script alias, and let the
+allow-list protect you from accidentally auto-running any legacy
+`verify_cmd` that predates Day 7.
 
 ## Manual testing
 

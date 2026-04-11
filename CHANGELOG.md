@@ -118,17 +118,55 @@ bodies) doesn't crash the CLI with cp1251 encoding errors.
   fix pattern stayed silent. **Effectiveness rate 0.17 for lookahead_parquet.**
 - +15 tests (107 total)
 
+### Day 7 — pre-flight verifier auto-run from hook
+
+**Static warnings become "your current code has this bug right now".**
+
+- **`cortex/verify_runner.py`**: runs `verify_cmd` for matched critical
+  tripwires during `cortex-hook` invocation and appends the results to the
+  injected brief. Safe-by-default:
+  - **Opt-in**: nothing runs unless `CORTEX_VERIFY_ENABLE=1` is set
+  - **Critical-only**: tripwires with severity `high` / `medium` / `low`
+    are skipped even when enabled (noise control)
+  - **Allow-list prefix**: commands must start with `cortex-` or
+    `python -m cortex` by default, overridable via
+    `CORTEX_VERIFY_PREFIXES="prefix1,prefix2,..."`
+  - **DANGER override**: `CORTEX_VERIFY_ALLOW_ANY=1` disables the allow-list
+    entirely — documented but not recommended
+  - **Hard timeout**: `CORTEX_VERIFY_TIMEOUT` (default 3s)
+  - **No shell**: commands parsed with `shlex.split`, run with `shell=False`
+  - **Captured output truncated**: stdout 500 chars, stderr 200 chars
+  - **Fail-safe**: timeout, OSError, parse error → `skipped` marker, no crash
+- **Hook integration**: `cortex-hook` calls `run_verifiers_for()` after
+  classification; results appear at the top of the brief right after the
+  synthesizer block. `inject` events log `verifier_ids` for audit.
+- **Brief rendering**: `[OK]` / `[FAIL]` / `[SKIP]` per tripwire with a
+  "VERIFIER FAILED: the bug is PRESENT in your current code. Fix before
+  proceeding" footer when any check fails.
+- **Seed update**: `lookahead_parquet` gets
+  `verify_cmd: "cortex-check-lookahead --features-dir DETECTOR"` as a
+  working Day 7 example. Gracefully no-ops when `DETECTOR/` doesn't exist
+  in the current working directory.
+- **Live smoke test**: with `CORTEX_VERIFY_ENABLE=1`, matching a Polymarket
+  backtest prompt against the BOTWA POLY project correctly SKIPs
+  `poly_fee_empirical` (its `verify_cmd` starts with `BOT/` — not
+  allow-listed, because it would execute a real trade) and runs
+  `cortex-check-lookahead` against the live `POLY/DETECTOR/` folder,
+  producing `[OK] lookahead_parquet — OK: scanned DETECTOR, 0 lookahead
+  patterns found`. Allow-list saved a destructive command from auto-execution.
+- +20 tests (127 total)
+
 ### Test coverage
 
 ```
-107 passed in ~1.9s
+127 passed in ~1.9s
 ```
 
 Modules covered: `store`, `importers/memory_md`, `classify`, `hook`,
 `synthesize`, `verifiers/check_feature_lookahead`, `session`, `watch`,
-`tfidf_fallback`, `stats`, `violation_detect`.
+`tfidf_fallback`, `stats`, `violation_detect`, `verify_runner`.
 
-### Day 7 — public release prep
+### Day 7 post-prep — public release housekeeping
 
 - Removed hardcoded BOTWA Palace path from `cli.py`; `cortex import-palace`
   now reads `$CORTEX_PALACE_PATH` env var, exits with a clear message if
