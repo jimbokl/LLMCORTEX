@@ -4,6 +4,96 @@
 
 Initial working version shipped over 4 iteration days.
 
+### Day 16 — DMN Promoter (autonomous lifecycle)
+
+**The promoter closes the loop between the Day-14 Surprise Engine, the
+Phase-0 composite fitness score, and the Day-15 shadow lifecycle.**
+Surprise pairs are classified by Haiku into `match / mismatch / partial`,
+labels replace the Day-14 token-overlap heuristic per pair, and a pure
+decider proposes `shadow -> active` / `active -> shadow` / `shadow ->
+archived` transitions that the applier writes atomically to a new audit
+table. Dry-run by default; mutation only with `--apply`.
+
+Ships as a 6-stage rollout. Every stage was committed separately with
+a green test suite so the git history walks the whole design.
+
+- **Stage 1 (store.py)**. Two new tables with idempotent DDL and
+  schema version bump 1 → 2:
+  - `pair_classifications` — one row per classified surprise pair,
+    primary key `(session_id, at)` so reruns of `cortex promote
+    classify` never re-bill the API. Label enum `match / mismatch /
+    partial / error`, confidence clamped to `[0,1]`, reasoning
+    truncated to 300 chars.
+  - `status_changes` — full audit trail for every tripwire status
+    transition, populated by every promoter action and by the new
+    `apply_status_transition` helper that wraps `set_status` + the
+    audit write in a single transaction.
+
+- **Stage 2 (`cortex/promoter_prompt.py` + `cortex/promoter.py`)**.
+  Haiku classification layer with a defensive parser (code-fence
+  strip, first `{...}` extract, enum check, confidence clamp,
+  reasoning truncate) and a client-injectable `classify_pair` so
+  tests never import `anthropic`. Any parse failure becomes a
+  persisted `label='error'` row so the pair is not retried.
+
+- **Stage 3 (`cortex/promoter.py` decider + applier)**. Threshold
+  constants grounded in the live empirical distribution (median hit
+  count 8, max cost_weight 2.67):
+  - Primary shadow → active (ALL required):
+    `MIN_HITS=5 MIN_DISTINCT_SESSIONS=3 MIN_TENURE_HOURS=168 (7d)
+    MIN_FITNESS=5.0 MIN_MISMATCHES=2 MIN_CAUGHT_RATE=0.8`.
+  - Classification-free fallback gate (OR): `FALLBACK_FITNESS=10.0
+    FALLBACK_DISTINCT_SESSIONS=5 FALLBACK_CAUGHT_RATE=0.9`.
+  - Demotion: `MAX_IGNORED_RATE_ACTIVE=0.5` (floor
+    `MIN_HITS_FOR_IGNORED_DEMOTE=3`), `DORMANT_HOURS=720` (30d),
+    `NEGATIVE_FITNESS_TENURE_HOURS=168`,
+    `SHADOW_TENURE_HOURS_FOR_ARCHIVE=336` (14d).
+  - Anti-flap cooldown: ≥2 changes in 168h freezes for another 168h.
+  - Per-calendar-day caps (NOT per-invocation):
+    `MAX_PROMOTIONS_PER_DAY=1 MAX_DEMOTIONS_PER_DAY=3`.
+  `decide()` is pure — no store, no LLM, no wall clock. Clock is
+  injected via a module-level `_now()` that tests monkeypatch.
+  `apply_decisions()` also writes a `status_change` session event
+  so `cortex timeline` surfaces each transition.
+
+- **Stage 4 (`cortex/fitness.py` + `cortex/cli.py`)**. `compute_fitness`
+  gains an optional `classification_index` kwarg. When a pair has a
+  classification, the label REPLACES the Day-14 heuristic per-pair
+  with `match→0.0 partial→0.5 mismatch→1.0 error→0.0` — replacement
+  (not sum) because both signals measure the same evidence.
+  Unclassified pairs still fall back to the heuristic, preserving
+  Day 14 behavior exactly. The row now carries `distinct_sessions`
+  and `mismatches` counters, both feeding the decider's gates.
+
+- **Stage 5 (`cortex/cli.py`)**. User-facing CLI:
+  - `cortex promote classify [--days] [--batch-size] [--dry-run]
+    [--yes]` — scans surprise pairs, filters already-classified via
+    PK, hard-caps at 200/call, prints cost estimate, requires `--yes`
+    when >10 pairs queued.
+  - `cortex promote run [--days] [--apply] [--session-id]` — runs
+    the decider against current store state; dry-run by default.
+  - `cortex promote log [--days]` — renders recent status changes
+    with fitness snapshots.
+
+- **Stage 6**. This CHANGELOG entry, live dry-run smoke test against
+  the repo's `.cortex/store.db`, and suite verification.
+
+**Test coverage**: +64 new tests over 6 commits. Stage 1 adds 13 store
+tests. Stage 2 adds 19 unit tests (parser + prompt + classify_pair).
+Stage 3 adds 18 more (decider + applier + clock injection). Stage 4
+adds 6 regression tests (classification override vs heuristic
+fallback + distinct_sessions tracking). Stage 5 adds 8 end-to-end
+CLI tests. Full suite: **383 passing** (was 319 after Day 14 fix +
+skills installer).
+
+**Known limitations (deferred to Day 17+)**:
+- Fitness history is not persisted — the "fitness < 0 for 7+ days"
+  demotion rule is approximated as `current_fitness < 0 AND
+  tenure_hours >= 168`.
+- Classifications are not invalidated when a tripwire body is edited.
+- The first shadow → active promotion is delayed by
+  `MIN_TENURE_HOURS=168` (7 days) by design.
+
 ### Day 15 — Shadow Mode (status lifecycle)
 
 **Tripwires now have a lifecycle: `active` -> `shadow` -> `archived`.
