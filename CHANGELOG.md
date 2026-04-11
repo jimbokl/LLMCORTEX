@@ -4,6 +4,228 @@
 
 Initial working version shipped over 4 iteration days.
 
+### Day 15 — Shadow Mode (status lifecycle)
+
+**Tripwires now have a lifecycle: `active` -> `shadow` -> `archived`.
+Shadow rules match the classifier and get logged to the audit log but
+are never rendered into `<cortex_brief>`. This is the safe probation
+path for DMN-proposed rules — the Day-9 lesson about auto-generated
+regex overfitting told us we cannot auto-promote to active without
+ground-truth evidence.**
+
+The infrastructure ships here; the Day-16+ promoter loop that graduates
+shadow -> active based on Day-14 Surprise Engine pairs is deferred until
+real prediction data accumulates.
+
+- **Schema delta**: `ALTER TABLE tripwires ADD COLUMN status TEXT
+  NOT NULL DEFAULT 'active'`. Idempotent in `_migrate_schema()`. Fresh
+  stores get a `CHECK (status IN ('active','shadow','archived'))`
+  constraint via `_SCHEMA`; migrated stores enforce the same values via
+  application-level validation in `add_tripwire()` and `set_status()`
+  (SQLite cannot add a CHECK constraint after the fact).
+
+- **Upsert intentionally omits `status` from the `ON CONFLICT DO UPDATE
+  SET` clause**, alongside `born_at` / `violation_count` /
+  `last_violated_at`. Re-running `cortex migrate` therefore never
+  demotes a shadow-tested tripwire back to active, and never promotes
+  a newly-seeded one if the user manually set it shadow. Tested by
+  `test_upsert_preserves_status`.
+
+- **New `CortexStore.set_status(tripwire_id, new_status)`** is the only
+  code path that mutates the status field after creation. Validates
+  against `_VALID_STATUSES`, returns False when the id is unknown,
+  raises `ValueError` on bogus status strings.
+
+- **`list_tripwires(status='active')` by default**. Day-15 signature
+  gains `status: str | None = 'active'`. The default keeps every
+  pre-Day-15 caller (including the hook path) from suddenly seeing
+  shadow rows. Pass `status=None` for "all statuses" (used by
+  `cortex list --all` and tests).
+
+- **`classify.py::classify_prompt` splits the result**:
+  - `tripwires`        -> active rows only, rendered into the brief
+  - `shadow_tripwires` -> shadow rows only, audit log only
+  - `archived` rows are hidden from both lists entirely
+  - Synthesis runs over the ACTIVE set only. Shadow synthesis is a
+    Day-16+ concern once we have evidence to score with.
+
+- **`hook.py` logs `shadow_hit` events**. When the classifier returns
+  a non-empty `shadow_tripwires`, the hook writes one event to the
+  session audit log BEFORE proceeding with the normal flow (so even a
+  later crash on the fail-open path preserves the signal needed by
+  the Day-16+ promoter). Shadow matches do NOT suppress the fallback:
+  if only shadow rows matched, `result["tripwires"]` is empty and
+  TF-IDF fallback still fires.
+
+- **CLI surface**:
+  - `cortex list --status {active|shadow|archived}` filter
+    (default remains `active`).
+  - `cortex list --all` shows every status.
+  - `cortex list` now prints the `STATUS` column per row.
+  - `cortex show <id>` displays the `Status:` line.
+  - `cortex add ... --status {active|shadow|archived}` initial lifecycle
+    state (defaults to `active`).
+  - `cortex status <id> <new_status>` explicit transition command.
+  - `cortex inbox approve --shadow <draft_id>` promotes a draft as
+    shadow. This is the intended safe path for DMN-proposed rules: an
+    operator reviews the draft in the inbox, hits `approve --shadow`,
+    and the rule starts accumulating `shadow_hit` audit entries
+    without touching the agent's context window.
+
+- **`inbox.draft_to_tripwire_kwargs`** now recognizes `status` as a
+  passthrough field, so drafts authored with an explicit
+  `"status": "shadow"` key in the JSON file are honored at approve
+  time (no flag needed).
+
+- **Tests (+24, total 276)**:
+  - `test_store.py` — 10 new tests covering the default 'active'
+    behaviour, explicit status on add, validation of invalid statuses,
+    `list_tripwires` default + filter + all, `set_status` transition
+    and error paths, upsert preserving status across re-migration,
+    and a full legacy-store migration simulation (drop the column,
+    reopen, verify rows come back with `status='active'`).
+  - `test_classify.py` — 2 new tests: classifier splits matched rows
+    into active / shadow / (hidden archived) buckets, and
+    `render_brief` never includes shadow tripwires even when they
+    match the rule engine.
+  - `test_hook.py` — 3 new tests: shadow_hit event is logged alongside
+    the normal inject for a mixed result, all-shadow matching still
+    logs shadow_hit even when the hook falls through to TF-IDF,
+    default state (no shadow rows) emits no shadow_hit events.
+  - `test_inbox.py` — 1 new test: `draft_to_tripwire_kwargs` passes
+    through a `status` field.
+  - `test_cli_status.py` — 8 new end-to-end argparse smoke tests
+    covering the four new CLI affordances.
+
+**Fail-open preserved**: every new path is wrapped in `try/except
+Exception: pass`. The `shadow_hit` write failing on IO error is
+swallowed, the hook still emits the active brief, exit code stays 0.
+Covered by the existing `test_hook_*_fails_open` family plus the
+Day-15 additions above.
+
+**Deliberately NOT shipped in Day 15** (see the Day-15 design note in
+the head of `classify.py` and `hook.py`):
+
+- **Day 16 — `cortex promote`** offline promoter that reads Day-14
+  surprise pairs plus `shadow_hit` events and auto-graduates rules
+  when `confidence >= 3` AND `cost_usd >= threshold`. Needs >=14 days
+  of real Surprise Engine data to calibrate the promotion threshold
+  (picking it blind is guessing). Blocker: empty surprise substrate.
+- **Day 17 — Cost-weighted LTD pruning.** Auto-archival of cold
+  tripwires is safe but not urgent. Auto-demoting `severity` on
+  low-violation rules is unsafe as originally proposed: a $500
+  one-shot tripwire can have `violation_count=1` forever and still
+  be worth keeping critical. The weighting formula must be cost-aware
+  and gated on `cost_usd < threshold` before any demotion.
+  Deferred until we have data showing which tripwires genuinely drift
+  cold vs stay valuable but rarely triggered.
+- **Day 18+ — Auto-mutation of YAML triggers by DMN.** This is
+  directly the Day-9 failure mode: auto-generated rules overfit to
+  one incident and break legitimate code. If/when it ships, mutations
+  go to the `inbox/` as diff-proposals, never direct YAML writes.
+
+### Day 14 — Surprise Engine (predictive coding)
+
+**Agent emits a falsifiable prediction before acting; Cortex captures
+it and pairs it with the real outcome, producing DMN's missing label
+column.**
+
+Borrowed straight from Karl Friston's predictive-coding framework: a
+brain only *learns* when reality diverges from its forward model. Our
+agent has no such signal today — DMN (`cortex reflect`) has to guess
+from tool_input snippets alone what counted as a "mistake". Day 14
+fixes that.
+
+- **`cortex/classify.py::_render_predict_block`**: when `render_brief`
+  sees at least one `critical` tripwire in the result, it appends a
+  soft-inject instruction block to the `<cortex_brief>` asking the
+  agent to emit a two-field XML prediction in its next reply:
+
+      <cortex_predict>
+        <outcome>falsifiable prediction ...</outcome>
+        <failure_mode>most likely technical reason this might fail</failure_mode>
+      </cortex_predict>
+
+  The two-field shape matters. A lazy "expect success" outcome is
+  cheap to fake; naming a concrete failure mode forces System-2
+  reasoning. When `failure_mode` diverges from the real outcome that's
+  the maximum-information signal for DMN.
+
+- **`cortex/surprise.py`** (new module, ~260 LOC):
+  - `parse_prediction(text)` — regex over `re.DOTALL | re.IGNORECASE`,
+    collapses whitespace inside each field, caps fields at 500 chars,
+    takes the FIRST block when multiple are present, returns None
+    on any malformed / missing input
+  - `read_last_assistant_text(transcript_path)` — walks a Claude Code
+    transcript jsonl once, returns the `text` content of the most
+    recent `type: "assistant"` entry. Thinking blocks and tool_use
+    blocks are ignored because the tag must appear in visible reply
+    text. Fail-safe on bad lines, missing files, malformed JSON.
+  - `collect_pairs(days, sessions_root)` — walks session logs,
+    maintains `active_tripwires` from the most recent inject /
+    fallback event, pairs each `prediction` event with the
+    immediately-following `tool_call` in the same session. Orphaned
+    predictions (no tool_call) are returned with `tool_name=None`
+    so the table surfaces "agent predicted but never acted" as a
+    separate signal.
+  - `render_surprise_table(pairs, days, max_rows)` — ASCII block
+    showing total / paired / orphan counts, then per-row predict /
+    fail_mode / actual tool / response.
+
+- **`cortex/watch.py` extensions**:
+  - Reads `transcript_path` from the PostToolUse payload, extracts the
+    last assistant text, calls `parse_prediction`, logs a `prediction`
+    event **before** the `tool_call` event (so forward-scan pairing
+    works).
+  - **Dedup**: when one assistant message contains N tool_use blocks,
+    PostToolUse fires N times against the same transcript. The
+    `_already_logged` helper scans backwards through the session log
+    and skips writing the prediction if the most recent prediction
+    event already has matching `outcome` + `failure_mode`. Prevents
+    N duplicate rows per multi-tool message.
+  - `tool_call` events now carry `response_snippet` in addition to
+    `input_snippet`. `_summarize_tool_response` handles the common
+    PostToolUse response shapes: dict with `stdout`/`text`/`content`,
+    plain string, or JSON-dumped fallback. Truncated at 500 chars.
+    This is what `cortex surprise` pairs against the prediction.
+
+- **`cortex/cli.py::cmd_surprise`**: new `cortex surprise [--days N]
+  [--max-rows N]` subcommand. Pure read-only walk over session logs,
+  no LLM calls. Day 15+ will add DMN match/mismatch classification
+  on top of this raw substrate.
+
+- **`cortex/stats.py::render_timeline`**: `PREDICT` rows now appear in
+  the ASCII event timeline alongside INJECT / tool_call / VIOLATION.
+  Respects `--anonymize` (outcome and failure_mode get redacted
+  through `anonymize_snippet`).
+
+- **Tests (+20, total 252)**:
+  - `test_surprise.py` — 14 tests covering regex happy path, multiline
+    fields, missing/malformed tags, first-block-wins, field length
+    caps, transcript walker picking the most recent assistant entry,
+    tolerating bad lines, collect_pairs pairing / orphan / two
+    predictions in a row, render empty / non-empty table.
+  - `test_watch.py` — 4 new tests: prediction captured from transcript
+    and logged before tool_call, dedup across multiple tool_calls for
+    one message, no prediction when transcript_path is absent,
+    tool_response snippet captured into `tool_call` event.
+  - `test_classify.py` — 2 new tests: `<cortex_predict>` footer fires
+    on critical tripwires, is omitted when only medium/high present.
+
+**Why this is Day 14 and not Day 15**: the raw substrate is the
+cheap, safe half. Storing pairs costs nothing beyond disk and doesn't
+touch the hook path's 60ms budget (parsing happens in `cortex-watch`,
+PostToolUse, which is not user-facing latency). DMN-side surprise
+classification is the expensive half — needs a Haiku call per pair
+and an unambiguous scoring rubric — and gets deferred to Day 15+
+when real session data accumulates.
+
+**Fail-open preserved**: every new path in `watch.py` is wrapped in
+`try/except Exception: pass`. Transcript missing, malformed JSON,
+parse errors, dedup-read failures — all swallowed, `tool_call`
+logging still runs, hook still exits 0. Verified by
+`test_watch_no_prediction_when_transcript_absent`.
+
 ### Day 1 — store + CLI
 
 - SQLite schema with `tripwires`, `cost_components`, `synthesis_rules`,

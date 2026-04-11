@@ -149,3 +149,166 @@ def test_delete_cascades_to_cost_components(store):
 
 def test_delete_nonexistent_returns_false(store):
     assert store.delete_tripwire("nope") is False
+
+
+# ---- Day 15: status column ----
+
+
+def test_new_tripwire_defaults_to_active_status(store):
+    store.add_tripwire(
+        id="t1", title="x", severity="low", domain="d",
+        triggers=["a"], body="b",
+    )
+    tw = store.get_tripwire("t1")
+    assert tw["status"] == "active"
+
+
+def test_add_with_shadow_status(store):
+    store.add_tripwire(
+        id="t_sh", title="x", severity="low", domain="d",
+        triggers=["a"], body="b", status="shadow",
+    )
+    assert store.get_tripwire("t_sh")["status"] == "shadow"
+
+
+def test_add_with_invalid_status_raises(store):
+    with pytest.raises(ValueError):
+        store.add_tripwire(
+            id="t_bad", title="x", severity="low", domain="d",
+            triggers=["a"], body="b", status="bogus",
+        )
+
+
+def test_list_tripwires_default_filters_to_active(store):
+    store.add_tripwire(
+        id="a", title="A", severity="high", domain="d",
+        triggers=["x"], body="b",
+    )
+    store.add_tripwire(
+        id="s", title="S", severity="high", domain="d",
+        triggers=["x"], body="b", status="shadow",
+    )
+    store.add_tripwire(
+        id="z", title="Z", severity="high", domain="d",
+        triggers=["x"], body="b", status="archived",
+    )
+    ids = [t["id"] for t in store.list_tripwires()]
+    assert ids == ["a"]
+
+
+def test_list_tripwires_all_statuses(store):
+    store.add_tripwire(
+        id="a", title="A", severity="high", domain="d",
+        triggers=["x"], body="b",
+    )
+    store.add_tripwire(
+        id="s", title="S", severity="high", domain="d",
+        triggers=["x"], body="b", status="shadow",
+    )
+    ids = {t["id"] for t in store.list_tripwires(status=None)}
+    assert ids == {"a", "s"}
+    shadow_ids = [t["id"] for t in store.list_tripwires(status="shadow")]
+    assert shadow_ids == ["s"]
+
+
+def test_set_status_transition(store):
+    store.add_tripwire(
+        id="t1", title="x", severity="low", domain="d",
+        triggers=["a"], body="b", status="shadow",
+    )
+    assert store.set_status("t1", "active") is True
+    assert store.get_tripwire("t1")["status"] == "active"
+
+
+def test_set_status_invalid_raises(store):
+    store.add_tripwire(
+        id="t1", title="x", severity="low", domain="d",
+        triggers=["a"], body="b",
+    )
+    with pytest.raises(ValueError):
+        store.set_status("t1", "bogus")
+
+
+def test_set_status_unknown_id_returns_false(store):
+    assert store.set_status("nope", "shadow") is False
+
+
+def test_upsert_preserves_status(store):
+    """Re-running `cortex migrate` must not clobber a manual shadow
+    decision on a tripwire that was promoted after the initial import."""
+    store.add_tripwire(
+        id="t1", title="A", severity="high", domain="d",
+        triggers=["x"], body="b",
+    )
+    store.set_status("t1", "shadow")
+    # Second import of the same id with default status='active'.
+    store.add_tripwire(
+        id="t1", title="A changed", severity="high", domain="d",
+        triggers=["x"], body="b",
+    )
+    # Status stays shadow because ON CONFLICT DO UPDATE SET omits
+    # the status column intentionally.
+    assert store.get_tripwire("t1")["status"] == "shadow"
+    assert store.get_tripwire("t1")["title"] == "A changed"
+
+
+def test_migration_adds_status_column_to_legacy_store(tmp_path):
+    """Simulate a pre-Day-15 store: drop the status column and reopen.
+
+    The migration runner on `_init_schema` must re-add the column with
+    default='active' so legacy rows stay visible to default list queries.
+    """
+    import sqlite3
+
+    db = tmp_path / "legacy.db"
+    store = CortexStore(db)
+    store.add_tripwire(
+        id="legacy_tw", title="old", severity="high", domain="d",
+        triggers=["x"], body="b",
+    )
+    store.close()
+
+    # Manually drop the status column by rebuilding the table without it.
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        ALTER TABLE tripwires RENAME TO tripwires_old;
+        CREATE TABLE tripwires (
+            id TEXT PRIMARY KEY, title TEXT NOT NULL,
+            severity TEXT NOT NULL, domain TEXT NOT NULL,
+            triggers TEXT NOT NULL, body TEXT NOT NULL,
+            verify_cmd TEXT, cost_usd REAL NOT NULL DEFAULT 0,
+            born_at TEXT NOT NULL, last_violated_at TEXT,
+            violation_count INTEGER NOT NULL DEFAULT 0,
+            source_file TEXT, violation_patterns TEXT
+        );
+        INSERT INTO tripwires
+          (id, title, severity, domain, triggers, body, verify_cmd,
+           cost_usd, born_at, last_violated_at, violation_count,
+           source_file, violation_patterns)
+          SELECT id, title, severity, domain, triggers, body, verify_cmd,
+                 cost_usd, born_at, last_violated_at, violation_count,
+                 source_file, violation_patterns
+          FROM tripwires_old;
+        DROP TABLE tripwires_old;
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Reopen: migration must add the column back.
+    store2 = CortexStore(db)
+    try:
+        tw = store2.get_tripwire("legacy_tw")
+        assert tw is not None
+        assert tw["status"] == "active"
+        # Idempotency: opening a second time must not crash.
+        store2.close()
+        store3 = CortexStore(db)
+        try:
+            assert store3.get_tripwire("legacy_tw") is not None
+        finally:
+            store3.close()
+    except Exception:
+        store2.close()
+        raise

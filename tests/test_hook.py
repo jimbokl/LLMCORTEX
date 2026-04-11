@@ -160,3 +160,95 @@ def test_hook_does_not_block_when_verifier_passes(monkeypatch, tmp_path):
     prompt = "run a poly backtest on 5m slot data"
     ret, _out = _run_hook(json.dumps({"session_id": "t4", "prompt": prompt}))
     assert ret == 0  # passed -> no block
+
+
+# ---------- Day 15: shadow mode ----------
+
+
+def test_hook_shadow_tripwire_not_injected_but_logged(monkeypatch, tmp_path):
+    """A tripwire with status='shadow' must NOT appear in the injected
+    brief, but must be recorded as a `shadow_hit` audit event."""
+    from cortex.session import read_session
+    from cortex.store import CortexStore
+
+    db = str(tmp_path / "seed.db")
+    run_migration(db)
+    # Demote one of the critical poly_backtest_task targets to shadow.
+    s = CortexStore(db)
+    s.set_status("real_entry_price", "shadow")
+    s.close()
+
+    monkeypatch.setenv("CORTEX_DB", db)
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
+    monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
+    monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
+
+    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    ret, out = _run_hook(json.dumps({"session_id": "sh_sess", "prompt": prompt}))
+    assert ret == 0
+    assert out, "hook should still emit active brief"
+    payload = json.loads(out)
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    # Active tripwires still render.
+    assert "poly_fee_empirical" in ctx
+    # The shadowed one must NOT appear in the visible brief.
+    assert "real_entry_price" not in ctx
+
+    events = read_session("sh_sess")
+    kinds = [e["event"] for e in events]
+    assert "shadow_hit" in kinds
+    shadow_ev = next(e for e in events if e["event"] == "shadow_hit")
+    assert "real_entry_price" in shadow_ev["tripwire_ids"]
+
+
+def test_hook_all_shadow_falls_through_to_fallback(monkeypatch, tmp_path):
+    """When every matched tripwire is shadow, the active list is empty
+    and the hook falls through to the TF-IDF fallback path. The
+    shadow_hit event must still be logged BEFORE the fallback fires."""
+    from cortex.session import read_session
+    from cortex.store import CortexStore
+
+    db = str(tmp_path / "seed.db")
+    run_migration(db)
+    # Nuke every active poly_backtest_task target to shadow.
+    s = CortexStore(db)
+    for tw_id in (
+        "poly_fee_empirical",
+        "lookahead_parquet",
+        "real_entry_price",
+        "backtest_must_match_prod",
+    ):
+        s.set_status(tw_id, "shadow")
+    s.close()
+
+    monkeypatch.setenv("CORTEX_DB", db)
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
+    monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
+    monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
+
+    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    ret, _out = _run_hook(json.dumps({"session_id": "all_sh", "prompt": prompt}))
+    assert ret == 0
+    events = read_session("all_sh")
+    kinds = [e["event"] for e in events]
+    # Shadow audit must be logged regardless of downstream path.
+    assert "shadow_hit" in kinds
+
+
+def test_hook_no_shadow_hit_event_when_only_active(monkeypatch, tmp_path):
+    """Sanity check: default state (no shadow rows) must not produce
+    any `shadow_hit` events."""
+    from cortex.session import read_session
+
+    db = str(tmp_path / "seed.db")
+    run_migration(db)
+    monkeypatch.setenv("CORTEX_DB", db)
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
+    monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
+    monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
+
+    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    ret, _out = _run_hook(json.dumps({"session_id": "clean", "prompt": prompt}))
+    assert ret == 0
+    kinds = [e["event"] for e in read_session("clean")]
+    assert "shadow_hit" not in kinds

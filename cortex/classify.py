@@ -84,10 +84,17 @@ def classify_prompt(
     """Classify a prompt and return matched rules + tripwires.
 
     Returns a dict with keys:
-      - matched_rules: list[str]   — ids of rules that fired
-      - tripwires:     list[dict]  — sorted by severity then cost, capped at max
-      - truncated:     bool        — True if tripwires was capped
-      - total_matches: int         — total tripwire hits before cap
+      - matched_rules:    list[str]   — ids of rules that fired
+      - tripwires:        list[dict]  — ACTIVE tripwires, sorted by severity
+                                        then cost, capped at max. These are
+                                        the ones that go into `<cortex_brief>`.
+      - shadow_tripwires: list[dict]  — matched rows with status='shadow'.
+                                        NEVER rendered into the brief; audit
+                                        only. Day 15.
+      - synthesis:        list[dict]  — synthesis rules fired over the
+                                        active set only
+      - truncated:        bool        — True if active tripwires was capped
+      - total_matches:    int         — total active matches before cap
     """
     tokens = _tokenize(prompt)
     rules = _load_rules(rules_dir or _RULES_DIR)
@@ -100,20 +107,36 @@ def classify_prompt(
             tripwire_ids.update(rule.get("inject", []) or [])
 
     tripwires: list[dict] = []
+    shadow_tripwires: list[dict] = []
     synthesis: list[dict] = []
     if tripwire_ids:
         store = CortexStore(db_path or find_db())
         try:
             for tw_id in tripwire_ids:
                 tw = store.get_tripwire(tw_id)
-                if tw:
-                    tripwires.append(tw)
+                if not tw:
+                    continue
+                # Day 15: archived rows are hidden from classification
+                # entirely. Shadow rows are captured separately for audit
+                # logging but never injected into the brief.
+                status = tw.get("status", "active") or "active"
+                if status == "archived":
+                    continue
+                if status == "shadow":
+                    shadow_tripwires.append(tw)
+                    continue
+                tripwires.append(tw)
+            # Synthesis runs over the ACTIVE set only. Shadow synthesis
+            # is a Day 16+ concern once the promoter loop exists.
             from cortex.synthesize import synthesize as _run_synthesize
             synthesis = _run_synthesize({t["id"] for t in tripwires}, store)
         finally:
             store.close()
 
     tripwires.sort(
+        key=lambda t: (_SEV_ORDER.get(t["severity"], 9), -t["cost_usd"])
+    )
+    shadow_tripwires.sort(
         key=lambda t: (_SEV_ORDER.get(t["severity"], 9), -t["cost_usd"])
     )
     total = len(tripwires)
@@ -123,6 +146,7 @@ def classify_prompt(
     return {
         "matched_rules": [r["id"] for r in matched_rules],
         "tripwires": tripwires,
+        "shadow_tripwires": shadow_tripwires,
         "synthesis": synthesis,
         "truncated": truncated,
         "total_matches": total,
@@ -195,9 +219,41 @@ def render_brief(result: dict[str, Any]) -> str:
         )
         lines.append("")
 
+    # Day 14: Surprise Engine. For critical tripwires, ask the agent to
+    # emit a falsifiable prediction before the next tool call. cortex-watch
+    # reads the transcript and logs a `prediction` event, which DMN later
+    # pairs with real outcomes to find the agent's blind spots.
+    if n_crit > 0:
+        lines.extend(_render_predict_block())
+
     lines.append(
         "To acknowledge a tripwire for this task and silence it, include"
     )
     lines.append("`--cortex-ack=<id>` in your next message.")
     lines.append("</cortex_brief>")
     return "\n".join(lines)
+
+
+def _render_predict_block() -> list[str]:
+    """The Day-14 'Surprise Engine' injection for critical tripwires.
+
+    The block asks the agent to emit a falsifiable prediction in a
+    machine-parseable XML format. The two-field shape (`outcome` +
+    `failure_mode`) forces System-2 reasoning: a formal 'expect success'
+    answer is trivial, but stating the most likely failure mode is not.
+    When `failure_mode` diverges from the real outcome captured by
+    PostToolUse, that is the maximum-information signal for DMN reflection.
+    """
+    return [
+        "CRITICAL TASK DETECTED. Before executing any tools, output your",
+        "expectation using this exact XML format in your reply text:",
+        "",
+        "<cortex_predict>",
+        "  <outcome>falsifiable prediction (e.g. PnL > 0, tests pass, 0 lookahead warnings)</outcome>",
+        "  <failure_mode>the most likely technical reason this might fail</failure_mode>",
+        "</cortex_predict>",
+        "",
+        "This is a soft request: if you omit it nothing breaks, but Cortex",
+        "cannot measure surprise and DMN loses a data point.",
+        "",
+    ]

@@ -46,3 +46,111 @@ def test_watch_missing_tool_name_noop(tmp_path, monkeypatch):
 def test_watch_missing_session_id_noop(tmp_path, monkeypatch):
     monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))
     assert _run_watch(json.dumps({"tool_name": "Bash"})) == 0
+
+
+# ---- Day 14: Surprise Engine transcript capture ----
+
+
+def _write_transcript(path, assistant_text: str) -> None:
+    """Minimal Claude Code transcript jsonl with one assistant message."""
+    rows = [
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": assistant_text}],
+            },
+        }
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+
+def test_watch_logs_prediction_from_transcript(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(
+        transcript,
+        "Let me verify.\n"
+        "<cortex_predict>\n"
+        "  <outcome>all tests pass</outcome>\n"
+        "  <failure_mode>stale cache</failure_mode>\n"
+        "</cortex_predict>",
+    )
+    payload = {
+        "session_id": "sess-predict",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pytest -q"},
+        "tool_response": {"stdout": "all ok\n"},
+        "transcript_path": str(transcript),
+    }
+    assert _run_watch(json.dumps(payload)) == 0
+    events = read_session("sess-predict")
+    # prediction must come before tool_call so collect_pairs can pair them.
+    kinds = [e["event"] for e in events]
+    assert kinds == ["prediction", "tool_call"]
+    assert events[0]["outcome"] == "all tests pass"
+    assert events[0]["failure_mode"] == "stale cache"
+    assert events[1]["tool_name"] == "Bash"
+    assert events[1]["response_snippet"] == "all ok"
+
+
+def test_watch_dedup_prediction_across_multiple_tool_calls(tmp_path, monkeypatch):
+    """If one assistant message has two tool_use blocks, PostToolUse
+    fires twice and both invocations read the same transcript. The
+    prediction event must NOT be duplicated."""
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))
+    transcript = tmp_path / "t.jsonl"
+    _write_transcript(
+        transcript,
+        "<cortex_predict>"
+        "<outcome>both tools succeed</outcome>"
+        "<failure_mode>path mismatch</failure_mode>"
+        "</cortex_predict>",
+    )
+    payload1 = {
+        "session_id": "sess-dedup",
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+        "transcript_path": str(transcript),
+    }
+    payload2 = {
+        "session_id": "sess-dedup",
+        "tool_name": "Read",
+        "tool_input": {"file_path": "a.py"},
+        "transcript_path": str(transcript),
+    }
+    assert _run_watch(json.dumps(payload1)) == 0
+    assert _run_watch(json.dumps(payload2)) == 0
+    events = read_session("sess-dedup")
+    kinds = [e["event"] for e in events]
+    # One prediction, two tool_calls.
+    assert kinds.count("prediction") == 1
+    assert kinds.count("tool_call") == 2
+
+
+def test_watch_no_prediction_when_transcript_absent(tmp_path, monkeypatch):
+    """No transcript_path -> no prediction event, still logs tool_call."""
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))
+    payload = {
+        "session_id": "sess-notranscript",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo hi"},
+    }
+    assert _run_watch(json.dumps(payload)) == 0
+    events = read_session("sess-notranscript")
+    assert [e["event"] for e in events] == ["tool_call"]
+
+
+def test_watch_logs_tool_response_snippet(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))
+    payload = {
+        "session_id": "sess-resp",
+        "tool_name": "Bash",
+        "tool_input": {"command": "pytest"},
+        "tool_response": {"stdout": "3 passed in 0.1s"},
+    }
+    assert _run_watch(json.dumps(payload)) == 0
+    events = read_session("sess-resp")
+    assert events[0]["response_snippet"] == "3 passed in 0.1s"

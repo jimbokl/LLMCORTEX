@@ -207,5 +207,6 @@ def draft_to_tripwire_kwargs(draft: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "id", "title", "severity", "domain", "triggers", "body",
         "verify_cmd", "cost_usd", "source_file", "violation_patterns",
+        "status",  # Day 15
     }
     return {k: v for k, v in draft.items() if k in allowed}

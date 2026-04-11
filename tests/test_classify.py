@@ -187,6 +187,150 @@ def test_real_rules_fire_on_replay_basis_arb():
         assert "poly_backtest_task" in result["matched_rules"]
 
 
+def test_render_brief_appends_predict_block_when_critical():
+    """Day 14: render_brief must append the <cortex_predict> instructions
+    when at least one critical tripwire is present in the result."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        db = str(tmp_p / "seed.db")
+        run_migration(db)
+        rules_dir = tmp_p / "rules"
+        _write_test_rules(rules_dir)
+        result = classify_prompt("backtest poly slot", db_path=db, rules_dir=rules_dir)
+        brief = render_brief(result)
+        assert "CRITICAL TASK DETECTED" in brief
+        assert "<cortex_predict>" in brief
+        assert "<outcome>" in brief
+        assert "<failure_mode>" in brief
+        assert "</cortex_predict>" in brief
+
+
+def test_classify_splits_active_and_shadow():
+    """Day 15: a rule that injects both an active and a shadow tripwire
+    must produce them on separate lists. Synthesis runs over active only."""
+    import sqlite3
+
+    from cortex.store import CortexStore
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        db = str(tmp_p / "seed.db")
+        store = CortexStore(db)
+        store.add_tripwire(
+            id="tw_active", title="active one", severity="critical",
+            domain="test", triggers=["x"], body="active body",
+        )
+        store.add_tripwire(
+            id="tw_shadow", title="shadow one", severity="high",
+            domain="test", triggers=["x"], body="shadow body",
+            status="shadow",
+        )
+        store.add_tripwire(
+            id="tw_archived", title="archived one", severity="high",
+            domain="test", triggers=["x"], body="archived body",
+            status="archived",
+        )
+        store.close()
+
+        rules_dir = tmp_p / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "test.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "rules": [
+                        {
+                            "id": "r_all",
+                            "match_any": ["trigger"],
+                            "and_any": ["test"],
+                            "inject": ["tw_active", "tw_shadow", "tw_archived"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = classify_prompt(
+            "trigger test", db_path=db, rules_dir=rules_dir,
+        )
+        active_ids = [t["id"] for t in result["tripwires"]]
+        shadow_ids = [t["id"] for t in result["shadow_tripwires"]]
+        assert active_ids == ["tw_active"]
+        assert shadow_ids == ["tw_shadow"]
+        # Archived must be hidden from BOTH lists.
+        assert "tw_archived" not in active_ids
+        assert "tw_archived" not in shadow_ids
+
+
+def test_render_brief_never_includes_shadow_tripwires():
+    """Even if shadow rules matched, the rendered brief must only show
+    active ones — shadow is audit-only by contract."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        db = str(tmp_p / "seed.db")
+        from cortex.store import CortexStore
+        store = CortexStore(db)
+        store.add_tripwire(
+            id="live", title="live title", severity="critical",
+            domain="test", triggers=["x"], body="live body",
+        )
+        store.add_tripwire(
+            id="probation", title="PROBATION_RULE", severity="critical",
+            domain="test", triggers=["x"], body="shadow body PROBATION_BODY",
+            status="shadow",
+        )
+        store.close()
+        rules_dir = tmp_p / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "r.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "rules": [
+                        {
+                            "id": "r",
+                            "match_any": ["trigger"],
+                            "and_any": ["test"],
+                            "inject": ["live", "probation"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = classify_prompt(
+            "trigger test", db_path=db, rules_dir=rules_dir,
+        )
+        brief = render_brief(result)
+        assert "live title" in brief
+        assert "PROBATION_RULE" not in brief
+        assert "PROBATION_BODY" not in brief
+
+
+def test_render_brief_omits_predict_block_when_no_critical():
+    """Only critical tripwires trigger the Surprise Engine request."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        db = str(tmp_p / "seed.db")
+        run_migration(db)
+        # Fabricate a result with only a medium-severity tripwire (no critical).
+        result = {
+            "matched_rules": ["r_test"],
+            "tripwires": [
+                {
+                    "id": "fake_medium",
+                    "title": "fake title",
+                    "severity": "medium",
+                    "body": "fake body",
+                    "cost_usd": 0.0,
+                }
+            ],
+            "synthesis": [],
+            "truncated": False,
+            "total_matches": 1,
+        }
+        brief = render_brief(result)
+        assert "<cortex_predict>" not in brief
+        assert "CRITICAL TASK DETECTED" not in brief
+
+
 def test_find_db_honors_env_var(monkeypatch, tmp_path):
     custom = str(tmp_path / "custom.db")
     monkeypatch.setenv("CORTEX_DB", custom)

@@ -14,6 +14,8 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 
+_VALID_STATUSES = ("active", "shadow", "archived")
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -32,7 +34,9 @@ CREATE TABLE IF NOT EXISTS tripwires (
     last_violated_at    TEXT,
     violation_count     INTEGER NOT NULL DEFAULT 0,
     source_file         TEXT,
-    violation_patterns  TEXT                   -- JSON array of regex strings (Day 6)
+    violation_patterns  TEXT,                  -- JSON array of regex strings (Day 6)
+    status              TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active','shadow','archived'))  -- Day 15
 );
 
 CREATE INDEX IF NOT EXISTS idx_tripwires_domain ON tripwires(domain);
@@ -111,12 +115,21 @@ class CortexStore:
     def _migrate_schema(self) -> None:
         """Apply forward-compatible schema deltas for stores created by
         older versions of this module. Each delta is idempotent."""
-        # Day 6: add tripwires.violation_patterns column if missing
         cur = self.conn.execute("PRAGMA table_info(tripwires)")
         existing_cols = {row[1] for row in cur.fetchall()}
+        # Day 6: add tripwires.violation_patterns column if missing
         if "violation_patterns" not in existing_cols:
             self.conn.execute(
                 "ALTER TABLE tripwires ADD COLUMN violation_patterns TEXT"
+            )
+        # Day 15: add tripwires.status column if missing. SQLite ALTER
+        # TABLE cannot add a CHECK constraint after the fact, so the
+        # check is only enforced for freshly created stores (via
+        # _SCHEMA). On migrated stores we rely on application-level
+        # validation in add_tripwire().
+        if "status" not in existing_cols:
+            self.conn.execute(
+                "ALTER TABLE tripwires ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
             )
 
     def close(self) -> None:
@@ -143,13 +156,24 @@ class CortexStore:
         cost_usd: float = 0.0,
         source_file: str | None = None,
         violation_patterns: list[str] | None = None,
+        status: str = "active",
     ) -> None:
         """Insert or update a tripwire.
 
-        Upsert preserves `born_at`, `violation_count`, and `last_violated_at`
-        across re-imports so that a `cortex migrate` rerun never clobbers
-        accumulated stats.
+        Upsert preserves `born_at`, `violation_count`, `last_violated_at`,
+        and `status` across re-imports so that a `cortex migrate` rerun
+        never clobbers accumulated stats or a manual shadow/archive
+        decision.
+
+        Day 15: the `status` field gates whether the tripwire reaches
+        `render_brief()` (active) or only the audit log (shadow), or is
+        hidden from classification entirely (archived). New tripwires
+        default to 'active' to preserve all pre-Day-15 behaviour.
         """
+        if status not in _VALID_STATUSES:
+            raise ValueError(
+                f"status must be one of {_VALID_STATUSES}, got {status!r}"
+            )
         patterns_json = (
             json.dumps(violation_patterns) if violation_patterns else None
         )
@@ -159,8 +183,8 @@ class CortexStore:
                 INSERT INTO tripwires
                     (id, title, severity, domain, triggers, body,
                      verify_cmd, cost_usd, born_at, source_file,
-                     violation_patterns)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     violation_patterns, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title              = excluded.title,
                     severity           = excluded.severity,
@@ -176,9 +200,28 @@ class CortexStore:
                     id, title, severity, domain,
                     json.dumps(triggers),
                     body, verify_cmd, cost_usd, _now_iso(), source_file,
-                    patterns_json,
+                    patterns_json, status,
                 ),
             )
+
+    def set_status(self, tripwire_id: str, status: str) -> bool:
+        """Explicit status transition. Returns True if a row was updated.
+
+        Day 15: this is the ONLY code path that mutates `status` after
+        creation. Upsert in `add_tripwire` intentionally preserves an
+        existing row's status so a `cortex migrate` rerun never demotes
+        a shadow-tested tripwire back to active, and vice versa.
+        """
+        if status not in _VALID_STATUSES:
+            raise ValueError(
+                f"status must be one of {_VALID_STATUSES}, got {status!r}"
+            )
+        with self.conn:
+            cur = self.conn.execute(
+                "UPDATE tripwires SET status = ? WHERE id = ?",
+                (status, tripwire_id),
+            )
+        return cur.rowcount > 0
 
     def get_tripwire(self, tripwire_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
@@ -191,7 +234,13 @@ class CortexStore:
         *,
         domain: str | None = None,
         severity: str | None = None,
+        status: str | None = "active",
     ) -> list[dict[str, Any]]:
+        """List tripwires. Day 15: defaults to `status='active'` so every
+        pre-Day-15 caller (including the hook path via `classify_prompt`)
+        continues to see only live rules. Pass `status=None` to get all
+        rows regardless of status (used by `cortex list --all` and tests).
+        """
         sql = "SELECT * FROM tripwires"
         where: list[str] = []
         params: list[Any] = []
@@ -201,6 +250,9 @@ class CortexStore:
         if severity:
             where.append("severity = ?")
             params.append(severity)
+        if status is not None:
+            where.append("status = ?")
+            params.append(status)
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += (

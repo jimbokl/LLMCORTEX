@@ -503,3 +503,110 @@ the full env var reference.
 4. **Verifier blocking mode** — when a `critical` pre-flight verifier
    fails, return a non-zero exit from the hook so Claude Code surfaces a
    hard stop rather than advisory context
+
+## Autonomy roadmap (Day 14 -> 18)
+
+Cortex has always been read-mostly. The agent reads the brief; a
+human approves every change to the store via the inbox. That is fine
+at small scale but leaves a question: can the system propose AND grade
+its own rules without a human in every loop, without degenerating
+into the auto-regex overfitting failure we saw on Day 9?
+
+The answer is to copy two more tricks from neuroscience and wire them
+on top of the substrate that already exists — **predictive coding**
+(Day 14, shipped) and **shadow probation with cost-weighted LTD
+pruning** (Day 15 shipped, Day 16-17 pending). The key insight: the
+agent needs a *ground-truth signal* before Cortex can safely
+auto-promote anything, and that signal only becomes available once
+we are capturing prediction/outcome pairs.
+
+### Day 14 — Surprise Engine (shipped)
+
+When a `critical` tripwire fires, the brief asks the agent to emit
+
+    <cortex_predict>
+      <outcome>falsifiable prediction</outcome>
+      <failure_mode>most likely technical reason this might fail</failure_mode>
+    </cortex_predict>
+
+`cortex-watch` reads the Claude Code transcript on every PostToolUse,
+extracts the block, and logs a `prediction` event immediately before
+the `tool_call` event. `cortex surprise` renders the paired
+`{prediction, tool_call, tool_response}` timeline. The two-field shape
+forces System-2 reasoning: a lazy `outcome: "success"` is trivial; a
+concrete `failure_mode` is not. When `failure_mode` diverges from the
+real outcome that is the maximum-information signal for DMN.
+
+No LLM calls are made here. DMN scoring of the pairs as
+match / partial / mismatch is a Day-16 concern. Day 14 stores the
+raw substrate.
+
+### Day 15 — Shadow Mode (shipped)
+
+Tripwires gain a `status` column with values `active` / `shadow` /
+`archived`. `classify_prompt` splits matched rows into
+`tripwires` (rendered into the brief) and `shadow_tripwires` (logged
+as `shadow_hit` audit events, never rendered).
+
+`cortex inbox approve --shadow <draft_id>` is the intended path for
+DMN-proposed drafts: the operator reviews the JSON, hits approve with
+the flag, and the rule starts accumulating `shadow_hit` entries
+without touching the agent's context window. This replaces the
+all-or-nothing "approve to active" flow while preserving the inbox
+review step.
+
+Upsert in `add_tripwire` intentionally omits `status` from the
+`ON CONFLICT DO UPDATE SET` clause, so `cortex migrate` re-runs never
+clobber a manual shadow decision. Likewise, the only code path that
+mutates `status` after creation is `CortexStore.set_status()`, used
+by `cortex status` CLI and (eventually) the Day-16 promoter.
+
+### Day 16 — `cortex promote` (deferred, needs data)
+
+The offline promoter reads the Day-14 surprise pairs plus the Day-15
+`shadow_hit` audit events. For each shadow tripwire, it computes a
+`confidence` score from the evidence:
+
+- In sessions where this shadow rule matched, how often did the
+  `{prediction, tool_response}` pair classify as "mistake"? Each hit
+  increments confidence by 1.
+- Promotion criterion: `confidence >= 3 AND cost_usd_estimate > 50`.
+- Promoted rules transition `status='shadow' -> status='active'` via
+  `CortexStore.set_status()`.
+
+The blocker is **data volume**, not code. Picking the promotion
+threshold blind is guessing; we need >=14 days of real Surprise
+Engine traffic to calibrate. Until then the shadow bucket just
+accumulates drafts while we watch what accrues.
+
+### Day 17 — Cost-weighted LTD pruning (deferred)
+
+"Use it or lose it" auto-archival, with a hard constraint: NEVER
+auto-demote `severity` based purely on violation count. The
+`poly_fee_empirical` tripwire cost $500 on one occurrence; its
+`violation_count` may stay low forever and still be worth keeping
+critical. Safe formulation:
+
+- A tripwire is a candidate for archival if:
+  `cost_usd < 50 AND days_since_last_match > 30 AND hits_ever < 3`
+- Cost-critical rows (`cost_usd >= 100`) are exempt from any
+  automatic status transition, forever.
+- `cortex decay --dry-run` is the default; flipping to real
+  mutations requires an explicit `--apply` flag.
+
+The goal is to keep the store compact without the silent loss of
+high-value / low-frequency lessons.
+
+### Day 18+ — Auto-mutation of YAML triggers (may never ship)
+
+This is the Day-9 failure mode waiting to happen. DMN observes
+"`r_poly_backtest` fired on a session where it was irrelevant" and
+wants to add `not_any: ["summary"]`. Auto-writing to
+`cortex/rules/*.yml` here is exactly how auto-regex overfit on Day 9.
+
+If this ever ships, mutations MUST flow through `inbox/` as
+diff-proposals, never direct YAML writes, and approve is human-gated
+by default. A `--auto-apply` flag may exist but is off by default.
+Likely verdict: the recall/precision trade-off on rule triggers is
+rare enough that manual tuning during `cortex stats --sessions`
+reviews is cheaper than building an auto-mutation pipeline.

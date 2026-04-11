@@ -45,6 +45,25 @@ def main() -> int:
         result = classify_prompt(prompt)
         session_id = payload.get("session_id", "") or ""
 
+        # Day 15: shadow matches are collected for audit only, never
+        # rendered into the brief. Log them BEFORE the rest of the flow
+        # so even a later crash / fail-open path preserves the signal
+        # needed by the Day-16+ promoter loop.
+        shadow_hits = result.get("shadow_tripwires") or []
+        if shadow_hits and session_id:
+            try:
+                from cortex.session import log_event
+                log_event(
+                    session_id,
+                    "shadow_hit",
+                    {
+                        "matched_rules": result.get("matched_rules") or [],
+                        "tripwire_ids": [t["id"] for t in shadow_hits],
+                    },
+                )
+            except Exception:
+                pass
+
         # Day 7: optional pre-flight verification for critical tripwires.
         # Opt-in via CORTEX_VERIFY_ENABLE=1. Fail-safe on any runner error.
         try:

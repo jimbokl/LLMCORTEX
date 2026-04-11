@@ -33,17 +33,27 @@ def cmd_migrate(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    # Day 15: --all shows every row regardless of status; --status X
+    # filters to a specific bucket; default is 'active' so pre-Day-15
+    # workflows keep seeing only live rules.
+    status: str | None = None if getattr(args, "all", False) else args.status
     with _open(args) as store:
-        rows = store.list_tripwires(domain=args.domain, severity=args.severity)
+        rows = store.list_tripwires(
+            domain=args.domain, severity=args.severity, status=status,
+        )
     if not rows:
         print("(no tripwires)")
         return 0
-    print(f"{'ID':<28} {'SEV':<9} {'DOMAIN':<12} {'COST':>8}  {'VIOL':>4}  TITLE")
-    print("-" * 100)
+    print(
+        f"{'ID':<28} {'SEV':<9} {'STATUS':<9} {'DOMAIN':<12} "
+        f"{'COST':>8}  {'VIOL':>4}  TITLE"
+    )
+    print("-" * 110)
     for r in rows:
-        title = r["title"][:38]
+        title = r["title"][:32]
+        st = r.get("status", "active") or "active"
         print(
-            f"{r['id']:<28} {r['severity']:<9} {r['domain']:<12} "
+            f"{r['id']:<28} {r['severity']:<9} {st:<9} {r['domain']:<12} "
             f"${r['cost_usd']:>7.2f}  {r['violation_count']:>4}  {title}"
         )
     return 0
@@ -58,6 +68,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     print(f"ID:          {tw['id']}")
     print(f"Title:       {tw['title']}")
     print(f"Severity:    {tw['severity']}")
+    print(f"Status:      {tw.get('status', 'active')}")
     print(f"Domain:      {tw['domain']}")
     print(f"Triggers:    {', '.join(tw['triggers'])}")
     print(f"Cost (USD):  ${tw['cost_usd']:.2f}")
@@ -373,6 +384,12 @@ def cmd_inbox_approve(args: argparse.Namespace) -> int:
         return 2
 
     kwargs = draft_to_tripwire_kwargs(draft)
+    # Day 15: `--shadow` promotes the draft as a shadow tripwire instead
+    # of active. The rule is matched by the classifier and logged as a
+    # `shadow_hit` audit event, but NEVER rendered into <cortex_brief>.
+    # This is the safe probation path for DMN-proposed rules.
+    if getattr(args, "shadow", False):
+        kwargs["status"] = "shadow"
     try:
         with _open(args) as store:
             store.add_tripwire(**kwargs)
@@ -381,7 +398,11 @@ def cmd_inbox_approve(args: argparse.Namespace) -> int:
         return 3
 
     delete_draft(args.draft_id)
-    print(f"Approved: {kwargs['id']} (draft {args.draft_id} removed)")
+    status_label = kwargs.get("status", "active")
+    print(
+        f"Approved: {kwargs['id']} (status={status_label}, "
+        f"draft {args.draft_id} removed)"
+    )
     return 0
 
 
@@ -430,6 +451,14 @@ def cmd_suggest_patterns(args: argparse.Namespace) -> int:
             fix_example=args.fix_example,
         )
     )
+    return 0
+
+
+def cmd_surprise(args: argparse.Namespace) -> int:
+    from cortex.surprise import collect_pairs, render_surprise_table
+
+    pairs = collect_pairs(days=args.days)
+    print(render_surprise_table(pairs, days=args.days, max_rows=args.max_rows))
     return 0
 
 
@@ -490,8 +519,27 @@ def cmd_add(args: argparse.Namespace) -> int:
             verify_cmd=args.verify_cmd,
             cost_usd=args.cost_usd,
             source_file=args.source_file,
+            status=args.status,
         )
-    print(f"Added tripwire: {args.id}")
+    print(f"Added tripwire: {args.id} (status={args.status})")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Day 15: explicit status transition for a tripwire."""
+    with _open(args) as store:
+        if store.get_tripwire(args.id) is None:
+            print(f"No tripwire with id={args.id!r}", file=sys.stderr)
+            return 1
+        try:
+            ok = store.set_status(args.id, args.new_status)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+    if not ok:
+        print(f"Failed to update status for {args.id}", file=sys.stderr)
+        return 3
+    print(f"{args.id}: status -> {args.new_status}")
     return 0
 
 
@@ -515,6 +563,17 @@ def build_parser() -> argparse.ArgumentParser:
     ls = sub.add_parser("list", help="List tripwires")
     ls.add_argument("--domain", help="Filter by domain")
     ls.add_argument("--severity", choices=SEVERITIES, help="Filter by severity")
+    ls.add_argument(
+        "--status",
+        default="active",
+        choices=("active", "shadow", "archived"),
+        help="Filter by lifecycle status (default: active). Day 15.",
+    )
+    ls.add_argument(
+        "--all",
+        action="store_true",
+        help="Show rows of every status (overrides --status). Day 15.",
+    )
     ls.set_defaults(func=cmd_list)
 
     sh = sub.add_parser("show", help="Show one tripwire")
@@ -626,6 +685,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Approve even when TODO placeholders remain in the draft",
     )
+    iap.add_argument(
+        "--shadow",
+        action="store_true",
+        help=(
+            "Promote as a SHADOW tripwire: the rule will match the "
+            "classifier and be logged as a `shadow_hit` audit event, "
+            "but never rendered into <cortex_brief>. Day 15 safe "
+            "probation path for DMN-proposed rules."
+        ),
+    )
     iap.set_defaults(func=cmd_inbox_approve)
 
     irj = inbox_sub.add_parser("reject", help="Delete a draft without promoting it")
@@ -700,6 +769,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     spp.set_defaults(func=cmd_suggest_patterns)
 
+    # ---- Day 14: Surprise Engine ----
+    sp = sub.add_parser(
+        "surprise",
+        help=(
+            "Show <cortex_predict> blocks paired with their actual "
+            "tool_call outcomes (predictive coding / Day 14)"
+        ),
+    )
+    sp.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Limit to sessions whose last event is in the last N days",
+    )
+    sp.add_argument(
+        "--max-rows",
+        type=int,
+        default=30,
+        dest="max_rows",
+        help="Truncate output at N most recent prediction/outcome pairs (default: 30)",
+    )
+    sp.set_defaults(func=cmd_surprise)
+
     # ---- Day 8.5: benchmarks ----
     bp = sub.add_parser(
         "bench",
@@ -738,7 +830,26 @@ def build_parser() -> argparse.ArgumentParser:
     ad.add_argument("--verify-cmd", default=None, dest="verify_cmd")
     ad.add_argument("--cost-usd", type=float, default=0.0, dest="cost_usd")
     ad.add_argument("--source-file", default=None, dest="source_file")
+    ad.add_argument(
+        "--status",
+        default="active",
+        choices=("active", "shadow", "archived"),
+        help="Initial lifecycle status (default: active). Day 15.",
+    )
     ad.set_defaults(func=cmd_add)
+
+    # ---- Day 15: explicit status transitions ----
+    st = sub.add_parser(
+        "status",
+        help="Transition a tripwire between active / shadow / archived",
+    )
+    st.add_argument("id", help="Tripwire id")
+    st.add_argument(
+        "new_status",
+        choices=("active", "shadow", "archived"),
+        help="New lifecycle status",
+    )
+    st.set_defaults(func=cmd_status)
 
     return p
 

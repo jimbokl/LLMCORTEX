@@ -227,3 +227,13 @@ def test_draft_to_tripwire_kwargs_filters_unknown():
     assert kwargs["id"] == "x"
     assert kwargs["verify_cmd"] == "cortex-check-x"
     assert kwargs["cost_usd"] == 42.0
+
+
+def test_draft_to_tripwire_kwargs_passes_status():
+    """Day 15: status field is now a recognized draft key."""
+    draft = {
+        "id": "x", "title": "X", "severity": "high", "domain": "d",
+        "triggers": ["a"], "body": "b", "status": "shadow",
+    }
+    kwargs = draft_to_tripwire_kwargs(draft)
+    assert kwargs["status"] == "shadow"

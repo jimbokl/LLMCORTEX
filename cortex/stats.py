@@ -512,6 +512,17 @@ def render_timeline(
         elif ev_type == "potential_violation":
             tw_id = event.get("tripwire_id", "?")
             lines.append(f"  {rel}  VIOLATION!  {tw_id}")
+        elif ev_type == "prediction":
+            outcome = event.get("outcome", "") or ""
+            fm = event.get("failure_mode", "") or ""
+            if anonymize:
+                outcome = anonymize_snippet(outcome)
+                fm = anonymize_snippet(fm)
+            outcome_disp = outcome[:60] + ("..." if len(outcome) > 60 else "")
+            fm_disp = fm[:60] + ("..." if len(fm) > 60 else "")
+            lines.append(f"  {rel}  PREDICT     expect: {outcome_disp}")
+            if fm_disp:
+                lines.append(f"             fail_mode: {fm_disp}")
         elif ev_type == "verifier_blocked":
             failed = event.get("failed_tripwires") or []
             lines.append(f"  {rel}  BLOCKED     verifier fail: {','.join(failed)[:50]}")
