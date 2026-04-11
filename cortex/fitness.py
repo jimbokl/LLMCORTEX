@@ -202,10 +202,23 @@ def _empty_row() -> dict[str, Any]:
         "hits": 0,
         "caught": 0,
         "ignored": 0,
-        "surprise_ok": 0,
+        # surprise_ok is a float in the row because Day 16 Haiku
+        # classification contributes fractional weights (partial=0.5,
+        # mismatch=1.0). The Day-14 token-overlap heuristic still emits
+        # integer 1 per pair, so the representation is a strict
+        # superset of the previous behavior.
+        "surprise_ok": 0.0,
         "frustration": 0,
         "cost_weight": 0.0,
         "fitness": 0.0,
+        # Day 16: track distinct session ids per tripwire for the DMN
+        # promoter's anti-replay-loop gate. Stripped from the row
+        # before JSON serialization / CLI rendering below.
+        "session_ids": set(),
+        # Day 16: count of Haiku-classified `label='mismatch'` pairs
+        # attributed to this tripwire in the fitness window. Feeds the
+        # promoter's MIN_MISMATCHES threshold.
+        "mismatches": 0,
     }
 
 
@@ -223,10 +236,19 @@ def _cost_factor(cost_usd: float) -> float:
     return math.log1p(cost_usd) * COST_WEIGHT_SCALE
 
 
+_LABEL_WEIGHTS: dict[str, float] = {
+    "match": 0.0,
+    "partial": 0.5,
+    "mismatch": 1.0,
+    "error": 0.0,
+}
+
+
 def compute_fitness(
     sessions: list[tuple[str, list[dict[str, Any]]]],
     tripwire_bodies: dict[str, str] | None = None,
     tripwire_costs: dict[str, float] | None = None,
+    classification_index: dict[tuple[str, str], str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Aggregate per-tripwire fitness over all session event streams.
 
@@ -235,11 +257,22 @@ def compute_fitness(
     cost_usd. When a body is missing the surprise match silently skips
     that tripwire; when a cost is missing it's treated as zero.
 
-    Returns `{tripwire_id: row}` where `row` has the seven fields shown
-    in `_empty_row()` plus the composite `fitness` number.
+    `classification_index` (Day 16, optional) maps
+    `(session_id, prediction.at_iso) -> label` where label is one of
+    `match`, `mismatch`, `partial`, `error`. When a classification
+    exists for a prediction, it REPLACES the token-overlap heuristic
+    for that pair (partial=0.5, mismatch=1.0, match/error=0.0 signal).
+    When the index is absent or the specific pair is not in it, the
+    function falls back to the Day-14 token overlap unchanged.
+
+    Returns `{tripwire_id: row}` where `row` has the eight fields shown
+    in `_empty_row()` plus the composite `fitness` number and a
+    `distinct_sessions` integer. `session_ids` is stripped before
+    return; consumers use `distinct_sessions` instead.
     """
     bodies = tripwire_bodies or {}
     costs = tripwire_costs or {}
+    cls_index = classification_index or {}
 
     stats: dict[str, dict[str, Any]] = defaultdict(_empty_row)
 
@@ -277,13 +310,32 @@ def compute_fitness(
                     if vid:
                         violated_ids.add(vid)
 
-            # Surprise: any prediction in this window whose failure_mode
-            # matches any tripwire body from this inject.
-            surprise_ids: set[str] = set()
+            # Surprise: per-pair classification override wins; fall
+            # back to the Day-14 token overlap heuristic otherwise.
+            # Tracked as a per-tripwire float so partial labels can
+            # contribute 0.5 without losing precision.
+            surprise_score: dict[str, float] = {}
+            mismatch_count: dict[str, int] = {}
             for ev in window:
                 if ev.get("event") != "prediction":
                     continue
                 fm = ev.get("failure_mode") or ""
+                cls_key = (_sid, ev.get("at", ""))
+                cls_label = cls_index.get(cls_key)
+                if cls_label is not None:
+                    weight = _LABEL_WEIGHTS.get(cls_label, 0.0)
+                    if weight > 0:
+                        for tid in tw_ids:
+                            surprise_score[tid] = (
+                                surprise_score.get(tid, 0.0) + weight
+                            )
+                    if cls_label == "mismatch":
+                        for tid in tw_ids:
+                            mismatch_count[tid] = mismatch_count.get(tid, 0) + 1
+                    continue
+
+                # Heuristic fallback (Day 14 path preserved for
+                # pre-classification / never-classified pairs).
                 if not fm:
                     continue
                 relevant_bodies = {
@@ -292,7 +344,9 @@ def compute_fitness(
                 if not relevant_bodies:
                     continue
                 matched = match_surprise_to_tripwires(fm, relevant_bodies)
-                surprise_ids.update(matched)
+                for tid in matched:
+                    # Integer +1 per matched pair, same as before.
+                    surprise_score[tid] = surprise_score.get(tid, 0.0) + 1.0
 
             # Frustration: read the NEXT inject's `prompt_frustration`
             # field. If the next inject didn't record a score (pre-Phase-0
@@ -312,6 +366,7 @@ def compute_fitness(
             for tw_id in tw_ids:
                 row = stats[tw_id]
                 row["hits"] += 1
+                row["session_ids"].add(_sid)
                 if tw_id in violated_ids:
                     row["ignored"] += 1
                 else:
@@ -319,8 +374,10 @@ def compute_fitness(
                     row["cost_weight"] += _cost_factor(
                         float(costs.get(tw_id, 0.0))
                     )
-                if tw_id in surprise_ids:
-                    row["surprise_ok"] += 1
+                if tw_id in surprise_score:
+                    row["surprise_ok"] += surprise_score[tw_id]
+                if tw_id in mismatch_count:
+                    row["mismatches"] += mismatch_count[tw_id]
                 if frustrated:
                     row["frustration"] += 1
 
@@ -335,6 +392,11 @@ def compute_fitness(
             3,
         )
         row["cost_weight"] = round(row["cost_weight"], 3)
+        row["surprise_ok"] = round(row["surprise_ok"], 3)
+        # Expose distinct session count, strip the internal set so
+        # the row is JSON-serializable.
+        row["distinct_sessions"] = len(row["session_ids"])
+        del row["session_ids"]
 
     return dict(stats)
 
@@ -370,7 +432,8 @@ def render_fitness_block(
         lines.append(
             f"  {tw_id:<28} "
             f"h={row['hits']:<3} c={row['caught']:<3} i={row['ignored']:<3} "
-            f"surp={row['surprise_ok']:<2} frust={row['frustration']:<2} "
+            f"surp={float(row['surprise_ok']):<4.1f} "
+            f"frust={row['frustration']:<2} "
             f"cw={row['cost_weight']:<5.2f} fit={row['fitness']:+.2f}"
         )
     lines.append("")

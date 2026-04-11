@@ -129,12 +129,25 @@ def _cmd_stats_sessions(args: argparse.Namespace) -> int:
     stats = compute_stats(sessions)
     with _open(args) as store:
         all_tripwires = store.list_tripwires()
+        # Day 16: hydrate the Haiku classification index from the
+        # `pair_classifications` table so `compute_fitness` can
+        # override its Day-14 token-overlap heuristic per-pair. Empty
+        # table -> empty dict -> bit-identical behavior to Day 14.
+        classifications = store.list_pair_classifications()
     all_ids = [tw["id"] for tw in all_tripwires]
     bodies = {tw["id"]: tw.get("body") or "" for tw in all_tripwires}
     costs = {tw["id"]: float(tw.get("cost_usd") or 0.0) for tw in all_tripwires}
+    classification_index: dict[tuple[str, str], str] = {
+        (row["session_id"], row["at"]): row["label"] for row in classifications
+    }
     cold = find_cold_tripwires(stats, all_ids)
     ratio = compute_primary_vs_fallback_ratio(sessions)
-    fitness = compute_fitness(sessions, tripwire_bodies=bodies, tripwire_costs=costs)
+    fitness = compute_fitness(
+        sessions,
+        tripwire_bodies=bodies,
+        tripwire_costs=costs,
+        classification_index=classification_index,
+    )
     print(render_stats(
         stats, cold, days=args.days,
         anonymize=getattr(args, "anonymize", False),

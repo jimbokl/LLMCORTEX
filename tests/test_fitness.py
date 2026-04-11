@@ -322,3 +322,178 @@ def test_render_fitness_block_sorts_descending_by_fitness():
     high_line = next(i for i, l in enumerate(out) if "high" in l)
     low_line = next(i for i, l in enumerate(out) if "low" in l)
     assert high_line < low_line
+
+
+# --------------------------------------------------------------------
+# Day 16: classification_index override vs heuristic fallback
+# --------------------------------------------------------------------
+
+
+def _prediction_at(failure_mode: str, at: str) -> dict:
+    return {
+        "event": "prediction",
+        "outcome": "ok",
+        "failure_mode": failure_mode,
+        "at": at,
+    }
+
+
+def test_compute_fitness_classification_mismatch_overrides_heuristic():
+    """A Haiku-labelled mismatch for a specific (session, at) pair
+    should contribute surprise_ok += 1.0 to every tripwire in the
+    surrounding inject AND increment the mismatches counter, while
+    skipping the token-overlap heuristic for that pair."""
+    bodies = {"t1": "completely unrelated body text about widgets"}
+    sessions = [
+        (
+            "s1",
+            [
+                _inject(["t1"]),
+                _prediction_at(
+                    # Deliberately NO vocabulary overlap with the body
+                    # above, so the heuristic would otherwise return 0.
+                    "totally different wording with nothing matching",
+                    at="2026-04-11T12:00:00+00:00",
+                ),
+            ],
+        )
+    ]
+    cls_index = {("s1", "2026-04-11T12:00:00+00:00"): "mismatch"}
+    fit = compute_fitness(
+        sessions,
+        tripwire_bodies=bodies,
+        classification_index=cls_index,
+    )
+    assert fit["t1"]["surprise_ok"] == 1.0
+    assert fit["t1"]["mismatches"] == 1
+    # caught (1.0) + surprise (0.5 * 1.0) = 1.5
+    assert fit["t1"]["fitness"] == 1.5
+
+
+def test_compute_fitness_classification_partial_contributes_half():
+    bodies = {"t1": "xyz"}
+    sessions = [
+        (
+            "s1",
+            [
+                _inject(["t1"]),
+                _prediction_at("anything", at="2026-04-11T12:00:00+00:00"),
+            ],
+        )
+    ]
+    cls_index = {("s1", "2026-04-11T12:00:00+00:00"): "partial"}
+    fit = compute_fitness(
+        sessions,
+        tripwire_bodies=bodies,
+        classification_index=cls_index,
+    )
+    assert fit["t1"]["surprise_ok"] == 0.5
+    assert fit["t1"]["mismatches"] == 0
+    # caught (1.0) + surprise (0.5 * 0.5) = 1.25
+    assert fit["t1"]["fitness"] == 1.25
+
+
+def test_compute_fitness_classification_match_suppresses_surprise():
+    """A `match` label contributes 0 surprise even if the heuristic
+    would otherwise have fired. This is the key claim: classification
+    REPLACES, not sums."""
+    bodies = {"t1": "use real entry price ask never midpoint fiction inflation"}
+    sessions = [
+        (
+            "s1",
+            [
+                _inject(["t1"]),
+                _prediction_at(
+                    # Would match the heuristic (3+ tokens overlap).
+                    "forgot real entry price and used midpoint fiction",
+                    at="2026-04-11T12:00:00+00:00",
+                ),
+            ],
+        )
+    ]
+    cls_index = {("s1", "2026-04-11T12:00:00+00:00"): "match"}
+    fit = compute_fitness(
+        sessions,
+        tripwire_bodies=bodies,
+        classification_index=cls_index,
+    )
+    assert fit["t1"]["surprise_ok"] == 0.0
+    assert fit["t1"]["mismatches"] == 0
+    # Only caught contributes. Heuristic was skipped.
+    assert fit["t1"]["fitness"] == 1.0
+
+
+def test_compute_fitness_classification_error_label_is_inert():
+    bodies = {"t1": "real entry price midpoint inflation"}
+    sessions = [
+        (
+            "s1",
+            [
+                _inject(["t1"]),
+                _prediction_at(
+                    "real entry price midpoint inflation story",
+                    at="2026-04-11T12:00:00+00:00",
+                ),
+            ],
+        )
+    ]
+    cls_index = {("s1", "2026-04-11T12:00:00+00:00"): "error"}
+    fit = compute_fitness(
+        sessions,
+        tripwire_bodies=bodies,
+        classification_index=cls_index,
+    )
+    # Error label suppresses both the heuristic (we still skip it)
+    # and any positive signal, so surprise_ok stays at 0.
+    assert fit["t1"]["surprise_ok"] == 0.0
+    assert fit["t1"]["fitness"] == 1.0
+
+
+def test_compute_fitness_unclassified_pair_falls_back_to_heuristic():
+    """Regression guard: when classification_index is missing or empty,
+    behavior must be bit-identical to Day 14 (token-overlap heuristic
+    fires exactly as before)."""
+    bodies = {"t1": "use real entry price ask never midpoint fiction inflation"}
+    sessions = [
+        (
+            "s1",
+            [
+                _inject(["t1"]),
+                _prediction_at(
+                    "forgot real entry price and used midpoint",
+                    at="2026-04-11T12:00:00+00:00",
+                ),
+            ],
+        )
+    ]
+    # No classification_index -> heuristic fires
+    fit_day14 = compute_fitness(sessions, tripwire_bodies=bodies)
+    assert fit_day14["t1"]["surprise_ok"] == 1.0
+    assert fit_day14["t1"]["fitness"] == 1.5
+    # Empty dict -> same result
+    fit_empty = compute_fitness(
+        sessions, tripwire_bodies=bodies, classification_index={}
+    )
+    assert fit_empty["t1"]["surprise_ok"] == 1.0
+    assert fit_empty["t1"]["fitness"] == 1.5
+    # Classification for a DIFFERENT pair leaves this one untouched.
+    fit_other = compute_fitness(
+        sessions,
+        tripwire_bodies=bodies,
+        classification_index={("sX", "zzz"): "mismatch"},
+    )
+    assert fit_other["t1"]["surprise_ok"] == 1.0
+
+
+def test_compute_fitness_tracks_distinct_sessions():
+    sessions = [
+        ("s1", [_inject(["t1"])]),
+        ("s2", [_inject(["t1"])]),
+        ("s1", [_inject(["t1"])]),  # same session id as first
+    ]
+    fit = compute_fitness(sessions)
+    # 3 hits but only 2 distinct session ids.
+    assert fit["t1"]["hits"] == 3
+    assert fit["t1"]["distinct_sessions"] == 2
+    # session_ids set should be stripped from the returned row.
+    assert "session_ids" not in fit["t1"]
