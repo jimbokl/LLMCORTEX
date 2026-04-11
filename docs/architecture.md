@@ -324,6 +324,109 @@ injection *effectiveness*. Day 7+ can tune rules and bodies based on
 which tripwires have high violation rates (ignored by the agent) vs low
 (applied).
 
+## Day 10 (shipped) — verifier blocking mode
+
+Day 7 added optional pre-flight verifier execution from the hook. Day
+10 makes it **blocking** when opted in: set `CORTEX_VERIFY_BLOCK=1`
+(on top of `CORTEX_VERIFY_ENABLE=1`), and any verifier that reports
+`passed=False` on a matched critical tripwire causes the hook to
+exit with code 2 — Claude Code's signal for "reject this prompt".
+
+The brief is still emitted before the exit so the agent sees the FAIL
+marker and can explain the rejection. The `inject` audit event gets
+a `blocked: true` field; a separate `verifier_blocked` event records
+the failed tripwire ids for Day-13+ accounting.
+
+Blocking is additive to the existing fail-open contract — any verifier
+crash (timeout, OS error, parse error) is still `skipped`, never
+counted as a failure, never triggers a block.
+
+## Day 11 (shipped) — Haiku DMN reflection loop
+
+Day 6 answered "are my tripwires being applied?" Day 9 answered
+"what should I pattern-match to detect violations?" Day 11 closes the
+last loop: **what tripwires am I missing?**
+
+`cortex reflect` reads recent session audit logs, builds a summary
+(event counts, top injected tripwires, cold tripwires, silent
+violations, non-matching sessions), loads the current store so the
+LLM doesn't duplicate, and asks Claude Haiku 4.5 to propose new
+tripwires. Proposals are written to the `.cortex/inbox/` directory
+(Day 8) for human review via `cortex inbox approve`.
+
+```
+          ┌──────────────────────┐
+          │  cortex reflect      │
+          │  [--days N]          │
+          │  [--dry-run]         │
+          └──────────────────────┘
+                    │
+                    ▼
+    ┌─────────────────────────────────┐
+    │  build_session_summary(days)    │
+    │  build_existing_tripwires(...)  │
+    │  build_prompt(...)              │
+    └─────────────────────────────────┘
+                    │
+                    ▼
+    ┌─────────────────────────────────┐
+    │  call_haiku(prompt)             │  <- Anthropic SDK
+    │  parse_proposals(response)      │
+    └─────────────────────────────────┘
+                    │
+                    ▼
+    ┌─────────────────────────────────┐
+    │  write_proposals_to_inbox(...)  │
+    └─────────────────────────────────┘
+                    │
+                    ▼
+       .cortex/inbox/dmn_haiku_*.json
+                    │
+                    ▼
+        cortex inbox list/show/approve
+```
+
+**Budget**: measured at ~1069 input tokens on a 17-session real-world
+sample. At Haiku 4.5 pricing (~$1/1M input, ~$5/1M output), a
+reflection call costs about $0.011. Negligible.
+
+**Optional dependency**: `anthropic>=0.40` under the `[dmn]` extra.
+Cortex's core install (just `pyyaml`) stays minimal. `cortex reflect`
+fails with a clear install-instruction message if the SDK is absent.
+
+**Why Haiku and not Sonnet/Opus?** Cost, latency, and the task
+profile. Reflection is a pattern-extraction job over structured data
+with a clear output schema. Haiku 4.5 handles it well and costs ~10x
+less than Sonnet. The dry-run mode + inbox approval gate provide
+human-in-the-loop quality control.
+
+**Why inbox and not direct store writes?** Autopromoted LLM proposals
+would dilute the curated signal in the store, which is the one thing
+Cortex is built to protect. The inbox step is non-negotiable: a human
+reads each proposal, edits TODO fields, and runs `cortex inbox approve`.
+
+## Rejected path — `cortex serve` daemon
+
+Day 8.5 measured the full `cortex-hook` subprocess cost at ~60ms
+(p50), dominated by Python startup + module imports. A long-running
+daemon would drop that to <5ms.
+
+Rejected after measurement:
+
+1. **60ms is below human perception.** Wall-clock savings per day are
+   on the order of 10 seconds. Against a full workday, that's noise.
+2. **Daemon complexity (lifecycle, health checks, port conflicts,
+   upgrades) significantly exceeds the savings.** The current
+   subprocess model is stateless, crash-safe, and upgrade-atomic.
+3. **Day 4 already taught this lesson** with the Palace semantic
+   daemon. Measure, then build only when the measurement justifies
+   the complexity.
+
+If a future load profile (high-throughput batch pipelines hitting the
+hook hundreds of times per minute) ever shifts the ROI calculation,
+we'll revisit. Until then: the subprocess model is the right
+abstraction.
+
 ## Day 8 (shipped) — inbox workflow
 
 The `cortex import-palace` command (Day 5) surfaces Palace drawers as

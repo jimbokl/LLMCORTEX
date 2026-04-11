@@ -363,6 +363,29 @@ def cmd_inbox_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reflect(args: argparse.Namespace) -> int:
+    try:
+        from cortex.dmn import render_reflection_report, run_reflection
+    except ImportError as e:
+        print(f"cortex reflect requires anthropic: {e}", file=sys.stderr)
+        print(
+            "Install via: pip install cortex-agent[dmn]",
+            file=sys.stderr,
+        )
+        return 1
+
+    db = args.db if args.db != DEFAULT_DB else None
+    result = run_reflection(
+        days=args.days,
+        model=args.model,
+        max_proposals=args.max_proposals,
+        dry_run=args.dry_run,
+        db_path=db,
+    )
+    print(render_reflection_report(result))
+    return 0 if result.get("error") is None else 2
+
+
 def cmd_suggest_patterns(args: argparse.Namespace) -> int:
     from cortex.suggest_patterns import (
         analyze_snippets,
@@ -558,6 +581,43 @@ def build_parser() -> argparse.ArgumentParser:
     irj = inbox_sub.add_parser("reject", help="Delete a draft without promoting it")
     irj.add_argument("draft_id", help="Draft id to reject")
     irj.set_defaults(func=cmd_inbox_reject)
+
+    # ---- Day 11: DMN reflection loop ----
+    rp = sub.add_parser(
+        "reflect",
+        help=(
+            "Haiku DMN reflection loop: analyze session logs and propose "
+            "new tripwires into the inbox for human approval"
+        ),
+    )
+    rp.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="How many days of session history to analyze (default: 7)",
+    )
+    rp.add_argument(
+        "--model",
+        default="claude-haiku-4-5-20251001",
+        help="Anthropic model id (default: claude-haiku-4-5-20251001)",
+    )
+    rp.add_argument(
+        "--max-proposals",
+        type=int,
+        default=3,
+        dest="max_proposals",
+        help="Cap on number of proposals to write to inbox (default: 3)",
+    )
+    rp.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help=(
+            "Build and print the prompt that would be sent to Haiku, "
+            "without making an API call. Use to inspect cost/content."
+        ),
+    )
+    rp.set_defaults(func=cmd_reflect)
 
     # ---- Day 9: pattern authoring helper ----
     spp = sub.add_parser(

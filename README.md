@@ -395,6 +395,7 @@ It's running live in one production project (the Polymarket research repo where 
 | `cortex inbox reject <draft_id>` | Delete a draft without promoting |
 | `cortex bench [--iterations N] [--no-subprocess] [--json]` | Benchmark subsystem latency, storage footprint, brief sizes |
 | `cortex suggest-patterns <tripwire_id> [--fix-example "..."]` | Auto-generate regex candidates for `violation_patterns` from past session log data |
+| `cortex reflect [--days N] [--dry-run]` | Haiku DMN reflection: propose new tripwires from session logs into the inbox |
 | `cortex-hook` | `UserPromptSubmit` hook entry point |
 | `cortex-watch` | `PostToolUse` audit hook entry point |
 | `cortex-check-lookahead --features-dir DIR` | Standalone lookahead-bug verifier |
@@ -454,16 +455,38 @@ backtest-vs-prod comparison, feature pipelines).
   automatically downgraded to `[LOW CONFIDENCE]`. No more hand-writing
   regexes while staring at snippets.
 
-**Day 10+** (not yet shipped):
+**Days 10-12 — shipped**:
 
-- **Weekly DMN reflection loop** — cheap LLM (Haiku) processes session
-  logs and proposes new tripwires straight into the inbox
-- **Verifier blocking mode** — when a `critical` pre-flight verifier
-  fails, return a non-zero hook exit so Claude Code surfaces a hard
-  stop rather than advisory context
-- **`cortex serve` daemon** — long-running process that keeps Python
-  warm, dropping subprocess cold start from ~60ms to <5ms
-- **PyPI release**
+- **Day 10: Verifier blocking mode** — `CORTEX_VERIFY_BLOCK=1` makes
+  a failed critical verifier exit code 2 from `cortex-hook`, rejecting
+  the prompt in Claude Code. The brief still emits so the agent sees
+  the FAIL marker.
+- **Day 11: Haiku DMN reflection loop** — `cortex reflect` reads
+  recent session logs, summarizes patterns, asks Claude Haiku 4.5 for
+  proposed new tripwires, writes drafts to the inbox for human
+  approval. Optional `[dmn]` extra, `--dry-run` budget preview,
+  ~$0.011 per reflection call. Mock-tested end-to-end; live dry-run
+  verified on 17 sessions / 1067 events.
+- **Day 12: PyPI release prep** — wheel builds cleanly
+  (`cortex_agent-0.1.0-py3-none-any.whl`, 71 KB, 21 Python modules,
+  2 YAML rule files, 4 console scripts). Metadata, urls, classifiers,
+  keywords all filled in. Publishing process documented in
+  [CONTRIBUTING.md](CONTRIBUTING.md). Awaiting maintainer credentials
+  for the actual upload.
+
+**Rejected: `cortex serve` daemon.** Day 8.5 measured subprocess cost
+at ~60ms, below human perception. A warm daemon would save ~10
+seconds/day against 8-12 hours of work — not worth the operational
+complexity. See [CHANGELOG.md](CHANGELOG.md) and
+[docs/architecture.md](docs/architecture.md) for the full
+post-mortem.
+
+**Day 13+** (speculative, no plans):
+
+- `cortex bench --compare <file>` for CI regression tracking
+- Multi-project store federation (one `.cortex/` per repo, optional
+  cross-project queries)
+- Web dashboard for session stats visualization
 
 ---
 

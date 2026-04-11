@@ -5,29 +5,54 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cortex-agent"
 version = "0.1.0"
-description = "Active executive-control and reflection layer for AI coding agents"
+description = "Active memory and executive control for AI coding agents. Classifies user prompts against a curated tripwire store, injects the matched lessons into the agent's working context via a Claude Code UserPromptSubmit hook, before the agent reasons about the task."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Cortex contributors"}]
-keywords = ["agent", "memory", "llm", "claude-code", "hooks", "tripwires"]
+keywords = [
+    "agent",
+    "memory",
+    "llm",
+    "claude",
+    "claude-code",
+    "hooks",
+    "tripwires",
+    "active-memory",
+    "prompt-injection",
+    "cost-synthesis",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Utilities",
 ]
 dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jimbokl/LLMCORTEX"
+Repository = "https://github.com/jimbokl/LLMCORTEX"
+Issues = "https://github.com/jimbokl/LLMCORTEX/issues"
+Changelog = "https://github.com/jimbokl/LLMCORTEX/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/jimbokl/LLMCORTEX/tree/main/docs"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "ruff>=0.3.0",
+]
+dmn = [
+    "anthropic>=0.40",
 ]
 
 [project.scripts]

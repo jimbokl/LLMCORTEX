@@ -101,6 +101,54 @@ Short and imperative:
 - [ ] README or docs updated if user-visible behavior changed
 - [ ] [CHANGELOG.md](CHANGELOG.md) updated under "Unreleased"
 
+## Publishing to PyPI (maintainers only)
+
+Cortex ships as `cortex-agent` on PyPI. The release process:
+
+```bash
+# 1. Bump version in pyproject.toml
+#    (follow semver: patch for fixes, minor for new features, major for breaking)
+
+# 2. Update CHANGELOG.md
+#    Move "Unreleased" changes to a new versioned section with today's date
+
+# 3. Verify tests and build locally
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
+ruff check cortex/ tests/
+python -m pip install --upgrade build twine
+python -m build                        # produces dist/cortex_agent-X.Y.Z-*
+
+# 4. Verify wheel contents (critical: rules/*.yml must be present)
+python -c "
+import zipfile, sys
+with zipfile.ZipFile('dist/cortex_agent-X.Y.Z-py3-none-any.whl') as z:
+    yml = [n for n in z.namelist() if n.endswith('.yml')]
+    assert len(yml) >= 2, 'rules/*.yml missing from wheel'
+    print('OK:', len(yml), 'YAML files in wheel')
+"
+
+# 5. Upload to TestPyPI first (dry-run the release)
+python -m twine upload --repository testpypi dist/*
+# Verify install from TestPyPI in a clean venv:
+python -m venv /tmp/test-cortex && /tmp/test-cortex/bin/pip install \
+    --index-url https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    cortex-agent
+
+# 6. Upload to real PyPI
+python -m twine upload dist/*
+
+# 7. Tag the release
+git tag vX.Y.Z
+git push origin vX.Y.Z
+
+# 8. GitHub release (use `gh release create vX.Y.Z --generate-notes`)
+```
+
+PyPI credentials live in `~/.pypirc` or `TWINE_USERNAME` / `TWINE_PASSWORD`
+env vars. Use an API token (starts with `pypi-`), never your account
+password. Scope the token to the `cortex-agent` project only.
+
 ## Questions
 
 Open a discussion or file an issue. The best PRs start with an issue

@@ -52,6 +52,19 @@ def main() -> int:
         except Exception:
             result["verifier_results"] = []
 
+        # Day 10: verifier blocking mode. When CORTEX_VERIFY_BLOCK=1 is set
+        # AND any critical verifier reports passed=False, we exit 2 after
+        # emitting the brief (so the agent still sees the warning). Exit 2
+        # is the Claude Code UserPromptSubmit convention for "block this
+        # prompt". We never block unless BOTH env vars are set --
+        # CORTEX_VERIFY_ENABLE (Day 7) AND CORTEX_VERIFY_BLOCK (Day 10).
+        should_block = False
+        if _verify_block_enabled():
+            for v in result["verifier_results"] or []:
+                if v.get("passed") is False:
+                    should_block = True
+                    break
+
         if not result["tripwires"]:
             # Rule engine miss -- fall back to in-process keyword scoring.
             fallback_hits: list = []
@@ -126,15 +139,41 @@ def main() -> int:
                         v.get("tripwire_id", "")
                         for v in result.get("verifier_results") or []
                     ],
+                    "blocked": should_block,
                 },
             )
+            if should_block:
+                log_event(
+                    session_id,
+                    "verifier_blocked",
+                    {
+                        "failed_tripwires": [
+                            v.get("tripwire_id", "")
+                            for v in result.get("verifier_results") or []
+                            if v.get("passed") is False
+                        ],
+                    },
+                )
         except Exception:
             pass
 
+        # Day 10: block the prompt by returning exit code 2 after the
+        # brief has been emitted. Claude Code treats non-zero from
+        # UserPromptSubmit as "reject this prompt". The brief with the
+        # FAIL marker still reaches the user's context so they can see
+        # WHY the prompt was blocked.
+        if should_block:
+            return 2
         return 0
     except Exception:
         # Fail open: never break the user prompt path.
         return 0
+
+
+def _verify_block_enabled() -> bool:
+    import os as _os
+
+    return _os.environ.get("CORTEX_VERIFY_BLOCK") == "1"
 
 
 if __name__ == "__main__":

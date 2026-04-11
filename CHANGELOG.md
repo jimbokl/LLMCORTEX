@@ -166,6 +166,136 @@ Modules covered: `store`, `importers/memory_md`, `classify`, `hook`,
 `synthesize`, `verifiers/check_feature_lookahead`, `session`, `watch`,
 `tfidf_fallback`, `stats`, `violation_detect`, `verify_runner`.
 
+### Day 12 — PyPI release prep
+
+**Wheel-ready for `pip install cortex-agent`.**
+
+- **`pyproject.toml` enriched**:
+  - Expanded `description` to include the full value prop
+  - Added `[project.urls]`: Homepage, Repository, Issues, Changelog, Documentation
+  - Added more classifiers (Intended Audience, Operating System, Quality Assurance, Utilities)
+  - Expanded keywords (agent, memory, llm, claude, claude-code, hooks, tripwires, active-memory, prompt-injection, cost-synthesis)
+- **Local build verified**: `python -m build` produces `cortex_agent-0.1.0.tar.gz`
+  (91 KB) + `cortex_agent-0.1.0-py3-none-any.whl` (71 KB). Wheel contains
+  21 Python modules, 2 YAML rule files, and all 4 console_scripts entries
+  (`cortex`, `cortex-hook`, `cortex-watch`, `cortex-check-lookahead`).
+- **Publishing process documented** in `CONTRIBUTING.md` (maintainer-only
+  section): version bump, CHANGELOG migration, TestPyPI dry-run, real
+  upload via `twine`, git tag, GitHub release.
+- **Not yet uploaded to PyPI** — awaiting project maintainer credentials
+  and TestPyPI verification. The source dist and wheel are
+  reproducible with `python -m build` from a clean checkout.
+
+### Day 11 — Haiku DMN reflection loop
+
+**`cortex reflect [--days N] [--dry-run]`** — cheap LLM analysis of
+session audit logs that proposes new tripwires to the inbox.
+
+- **`cortex/dmn.py`** (~450 lines): full reflection pipeline
+  - `build_session_summary(days)` — aggregates recent activity via
+    `cortex.stats.collect_sessions` (event counts, top tripwires,
+    cold tripwires, silent violations)
+  - `build_existing_tripwires_summary(db_path)` — compact list for
+    the anti-duplication constraint in the prompt
+  - `build_prompt(summary, existing, max_proposals)` — renders a
+    carefully engineered prompt that includes the existing tripwires
+    (do not duplicate), recent session activity, and a strict JSON
+    output schema
+  - `parse_proposals(response_text)` — tolerant of leading/trailing
+    prose, markdown code fences, non-dict elements; returns empty
+    list on any parse error
+  - `call_haiku(prompt, model, client)` — thin wrapper over
+    `anthropic.messages.create` with dependency-injection for tests
+  - `write_proposals_to_inbox(proposals)` — strips Haiku's `evidence`
+    field into the body prefix, writes each proposal via `inbox.write_draft`
+    with `source="dmn_haiku"`
+  - `run_reflection(days, model, max_proposals, dry_run, client)` —
+    orchestrates the full flow, handles errors, returns a structured
+    result dict for rendering
+  - `render_reflection_report(result)` — human-readable output with
+    dry-run / error / success branches
+- **Default model**: `claude-haiku-4-5-20251001` (the most recent Claude
+  Haiku). Override with `--model`.
+- **Optional dependency**: `pip install cortex-agent[dmn]` installs
+  `anthropic>=0.40`. Without it, `cortex reflect` fails with a clear
+  "install via [dmn] extra" message.
+- **Budget**: measured at ~1069 input tokens on a 17-session live run
+  (~$0.001 input + $0.01 output = ~$0.011 per reflection). Trivial.
+- **`--dry-run` flag**: builds and prints the prompt that would be sent
+  WITHOUT making an API call. Essential for reviewing prompt quality
+  before paying for tokens.
+- **Live dry-run verified** on 17 sessions / 1067 events from real
+  BOTWA session history. The prompt includes all 13 existing tripwires,
+  top injected tripwire counts (29x poly_fee_empirical, 25x
+  real_entry_price, etc.), and a complete JSON schema example.
+- **Mock-tested end-to-end**: 19 tests in `test_dmn.py` cover
+  session summary / prompt building / proposal parsing (clean / code-fenced
+  / prosed / malformed) / Haiku client via dependency injection / inbox
+  write with evidence-to-body promotion / error handling / proposal
+  capping / render report (dry-run / success / error branches).
+- **Real API call not tested in CI**: requires `ANTHROPIC_API_KEY`, which
+  is not set on the dev machine (Claude Code subscriptions use a
+  different auth mechanism and cannot be used for direct API calls).
+  The dry-run + mocked tests prove the flow is correct end-to-end;
+  running `cortex reflect` against the live API is one env var away.
+- +19 tests (total grows to 213)
+
+### Day 10 — verifier blocking mode
+
+**When a critical pre-flight verifier fails, block the prompt.**
+
+- **New env var**: `CORTEX_VERIFY_BLOCK=1`. Opt-in on top of
+  `CORTEX_VERIFY_ENABLE=1`. Blocking requires BOTH to be set.
+- **`cortex/hook.py`**: after the verifier results are computed, scan
+  for any result with `passed: False`. If blocking is enabled AND any
+  verifier failed, the hook still emits the brief (so the agent sees
+  the FAIL marker and can explain the block) but then **returns exit
+  code 2** instead of 0. Claude Code treats non-zero
+  `UserPromptSubmit` as "reject this prompt".
+- **Audit log**: on block, the hook writes a `verifier_blocked` event
+  with the list of failed tripwire ids. The `inject` event also gets
+  a new `blocked` field. Both visible in `cortex stats --sessions`
+  for Day-13+ effectiveness tracking.
+- **Fail-safe**: blocking only triggers on successful verifier runs
+  that reported passed=False. Any verifier crash (timeout, parse error,
+  exception) is still `skipped`, never counted as a failure, never
+  blocks. The hook remains fail-open on every error path.
+- **Tests**: 4 new tests in `test_hook.py` cover:
+  - block env unset -> normal flow
+  - block env set but enable unset -> normal flow
+  - block + enable + verifier fail -> exit 2 + brief still emitted
+  - block + enable + verifier pass -> exit 0
+
+### Rejected path — `cortex serve` daemon
+
+A long-running HTTP daemon that keeps the Python interpreter + cortex
+imports warm, dropping the per-prompt `cortex-hook` subprocess cost
+from ~60ms (measured in Day 8.5) to <5ms.
+
+**Rejected after measurement.**
+
+1. **60ms is below human perception.** At 20 prompts/session × 10
+   sessions/day = 200 prompts/day, the daemon saves ~11 seconds of
+   wall time per day. Against 8-12 hours of actual work, that's
+   immeasurable.
+2. **Daemon complexity is real.** Lifecycle management (start on
+   login? systemd unit? Windows service?), health checks, crash
+   recovery, port conflicts, stale-state on upgrades. The
+   `cortex-hook` subprocess is stateless, crashes don't persist,
+   upgrades are atomic.
+3. **Day 4 already taught this lesson.** The Palace semantic daemon
+   was built and killed the same day because the ROI didn't justify
+   the ops burden. `cortex serve` would have been the same story for
+   the same reason.
+
+If future benchmark data shows the 60ms becoming load-bearing (e.g.,
+a high-throughput batch pipeline hitting the hook hundreds of times
+in a row), we'll revisit. Until then: **the subprocess model is the
+right abstraction** and ~60ms is an entirely acceptable tax.
+
+Documented here in the spirit of Day 4's Palace-daemon post-mortem:
+measure before you build, document what you chose not to build.
+
 ### Day 9 — auto-regex pattern-suggest helper
 
 **`cortex suggest-patterns <tripwire_id> [--fix-example "..."]`** reads
