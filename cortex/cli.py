@@ -531,6 +531,39 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_install_skills(args: argparse.Namespace) -> int:
+    """Copy bundled SKILL.md files into ~/.claude/skills/ (or project)."""
+    from cortex.skills_install import (
+        default_project_skills_dir,
+        default_user_skills_dir,
+        install_skills,
+        list_bundled_skills,
+        render_install_report,
+    )
+
+    if args.list:
+        names = list_bundled_skills()
+        if not names:
+            print("(no bundled skills found)")
+            return 1
+        print(f"{len(names)} bundled skill(s):")
+        for n in names:
+            print(f"  - {n}")
+        return 0
+
+    target = (
+        default_project_skills_dir() if args.project else default_user_skills_dir()
+    )
+    only: list[str] | None = None
+    if args.only:
+        only = [s.strip() for s in args.only.split(",") if s.strip()]
+    report = install_skills(target, only=only, force=args.force)
+    print(render_install_report(report))
+    if report["errors"]:
+        return 2
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Day 15: explicit status transition for a tripwire."""
     with _open(args) as store:
@@ -843,6 +876,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Initial lifecycle status (default: active). Day 15.",
     )
     ad.set_defaults(func=cmd_add)
+
+    # ---- skills installer ----
+    isk = sub.add_parser(
+        "install-skills",
+        help=(
+            "Copy bundled Claude Code SKILL.md files into "
+            "~/.claude/skills/ (or .claude/skills/ with --project)"
+        ),
+    )
+    isk.add_argument(
+        "--project",
+        action="store_true",
+        help=(
+            "Install into the current project's .claude/skills/ instead "
+            "of the user-level ~/.claude/skills/. Useful when the skills "
+            "should ship with the repo."
+        ),
+    )
+    isk.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing skill directories",
+    )
+    isk.add_argument(
+        "--only",
+        default=None,
+        help=(
+            "Comma-separated list of skill names to install (e.g. "
+            "'cortex-bootstrap,cortex-status'). Default: install all."
+        ),
+    )
+    isk.add_argument(
+        "--list",
+        action="store_true",
+        help="List bundled skills without copying anything",
+    )
+    isk.set_defaults(func=cmd_install_skills)
 
     # ---- Day 15: explicit status transitions ----
     st = sub.add_parser(

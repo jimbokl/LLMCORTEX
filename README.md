@@ -107,6 +107,30 @@ Test without launching Claude Code:
 echo '{"prompt":"run a 5m poly directional backtest"}' | cortex-hook | python -m json.tool
 ```
 
+## Active capabilities (Claude Code skills)
+
+Cortex ships five Claude Code skills that turn Cortex from a passive
+hook into an active toolbox the agent reaches for on its own:
+
+```bash
+cortex install-skills            # copy into ~/.claude/skills/
+cortex install-skills --list     # show what's bundled
+cortex install-skills --project  # install into ./.claude/skills/ instead
+```
+
+| skill | what it does | activates on |
+|---|---|---|
+| `cortex-bootstrap` | seeds Cortex from local docs on a fresh project | "set up cortex", "обучи cortex" |
+| `cortex-capture-lesson` | distills an incident the user describes into an inbox draft | "we just lost X", "post-mortem", "запомни этот баг" |
+| `cortex-search` | actively queries the store before committing to an approach | "what does cortex know about X" |
+| `cortex-tune` | reads Phase-0 fitness, proposes rule rewording / depreciation | "cortex tuning", "which lessons aren't working" |
+| `cortex-status` | six-check health audit at the start of any session | "is cortex working here", "cortex status" |
+
+The skills never write to the store directly — they always go through
+the inbox workflow so the human stays in the approval loop. Skills
+auto-activate from their description frontmatter; restart your
+Claude Code session after the first install to pick them up.
+
 ## Use cases
 
 Cortex was born in a Polymarket research project, but the pattern is domain-agnostic. You want Cortex if one or more of these sounds familiar:

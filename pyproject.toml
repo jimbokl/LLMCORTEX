@@ -73,7 +73,7 @@ where = ["."]
 include = ["cortex*"]
 
 [tool.setuptools.package-data]
-cortex = ["rules/*.yml"]
+cortex = ["rules/*.yml", "skills/*/SKILL.md"]
 
 [tool.ruff]
 line-length = 100

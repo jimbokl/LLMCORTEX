@@ -85,12 +85,20 @@ the user which docs you found insufficient.
 
 ```bash
 pip install llmcortex-agent
+cortex install-skills      # one-time: copy bundled SKILL.md into ~/.claude/skills/
 cd /path/to/the/new/project
-cortex init             # creates .cortex/store.db
+cortex init                # creates .cortex/store.db
 ```
 
 The store is a single SQLite file under `.cortex/store.db`. Cortex walks up
 from CWD looking for it, so subcommands work from any subdirectory.
+
+`cortex install-skills` is idempotent and runs once per machine. After it
+runs, every Claude Code session — in any project — gets access to the
+five Cortex skills (`cortex-bootstrap`, `cortex-capture-lesson`,
+`cortex-search`, `cortex-tune`, `cortex-status`). The skills auto-activate
+based on description matching; the user never has to remember a CLI
+command.
 
 ### Step 2 — Inventory the project's documentation
 
