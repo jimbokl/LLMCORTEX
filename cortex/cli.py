@@ -363,6 +363,23 @@ def cmd_inbox_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bench(args: argparse.Namespace) -> int:
+    from cortex.bench import render_report, run_benchmarks
+
+    report = run_benchmarks(
+        db_path=args.db if args.db != DEFAULT_DB else None,
+        iterations=args.iterations,
+        skip_subprocess=args.no_subprocess,
+    )
+    if args.json:
+        import json as _json
+
+        print(_json.dumps(report, indent=2, default=str))
+        return 0
+    print(render_report(report))
+    return 0
+
+
 def cmd_inbox_reject(args: argparse.Namespace) -> int:
     from cortex.inbox import delete_draft, read_draft
 
@@ -516,6 +533,30 @@ def build_parser() -> argparse.ArgumentParser:
     irj = inbox_sub.add_parser("reject", help="Delete a draft without promoting it")
     irj.add_argument("draft_id", help="Draft id to reject")
     irj.set_defaults(func=cmd_inbox_reject)
+
+    # ---- Day 8.5: benchmarks ----
+    bp = sub.add_parser(
+        "bench",
+        help="Benchmark Cortex subsystem latency, storage footprint, brief sizes",
+    )
+    bp.add_argument(
+        "--iterations",
+        type=int,
+        default=1000,
+        help="Iterations per in-process latency measurement (default: 1000)",
+    )
+    bp.add_argument(
+        "--no-subprocess",
+        action="store_true",
+        dest="no_subprocess",
+        help="Skip the slower end-to-end cortex-hook subprocess measurement",
+    )
+    bp.add_argument(
+        "--json",
+        action="store_true",
+        help="Output structured JSON instead of human-readable text",
+    )
+    bp.set_defaults(func=cmd_bench)
 
     fd = sub.add_parser("find", help="Find tripwires by trigger keywords")
     fd.add_argument("words", help="Comma-separated list of words")

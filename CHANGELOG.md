@@ -166,6 +166,28 @@ Modules covered: `store`, `importers/memory_md`, `classify`, `hook`,
 `synthesize`, `verifiers/check_feature_lookahead`, `session`, `watch`,
 `tfidf_fallback`, `stats`, `violation_detect`, `verify_runner`.
 
+### Day 8.5 — benchmark suite
+
+**Measured answers instead of hand-waved claims.**
+
+- **`cortex/bench.py`**: `run_benchmarks()` runs per-subsystem latency
+  benchmarks (tokenize / classify_prompt / fallback_search / synthesize
+  / render_brief) using `time.perf_counter` with warmup + N iterations,
+  measures storage footprint (SQLite size + row counts by section),
+  session log footprint (file count + total bytes), brief size
+  distribution across 10 canned test prompts, and end-to-end
+  `cortex-hook` subprocess latency via `shutil.which` + `subprocess.run`.
+  Plus a break-even token impact analysis.
+- **`cortex bench`** CLI: `--iterations N`, `--no-subprocess`, `--json`.
+- **[BENCHMARKS.md](BENCHMARKS.md)**: full report with real numbers from
+  the live BOTWA store. Headline: `classify_prompt` p50 = 6.3 ms,
+  end-to-end hook subprocess p50 = 59.3 ms, avg brief ≈ 1250 tokens,
+  break-even at 1 prevented mistake per 2 injections.
+- **README FAQ updated** to cite measured numbers (was: hand-waved
+  `<20 ms` claim; now: specific percentiles from the bench output).
+- +11 tests for `bench.py` structure (not regression-sensitive on
+  actual numbers — tests verify shape, not performance).
+
 ### Day 8 — inbox workflow
 
 **The human-approval step between "I found something" and "it's in the store".**

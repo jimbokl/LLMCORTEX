@@ -333,13 +333,21 @@ The TF-IDF fallback exists for when the rule engine misses. It's still determini
 
 ### What's the cost at hook time?
 
-- Rule match: <1ms
-- TF-IDF fallback: <1ms
-- Synthesizer: <5ms
-- Audit log append: <1ms
-- Total `cortex-hook` round-trip: **<20ms** on a warm Python interpreter
+Measured on the live BOTWA store (see [BENCHMARKS.md](BENCHMARKS.md)):
 
-The longest thing in the hook path is a single SQLite query. No network, no subprocess, no embeddings, no model load.
+- Tokenize: **1 µs** (p50)
+- TF-IDF fallback: **0.5 ms** (p50)
+- Synthesize: **17 µs** (p50)
+- Render brief: **12 µs** (p50)
+- Full `classify_prompt` in-process: **6.3 ms** (p50, 8.8 ms p99) — dominated by YAML rule parse and SQLite store open
+- **End-to-end `cortex-hook` subprocess**: **~58 ms** per fresh invocation (Python startup + imports + Cortex work)
+
+The 58 ms per-prompt wall-clock cost is well below human perception and
+well below any network hop your agent makes. On a warm long-running
+process (Day-9 `cortex serve` mode, not shipped yet) the full pipeline
+is <1 ms.
+
+Run `cortex bench` yourself to reproduce these numbers on your machine.
 
 ### Does it work on Linux / Mac / Windows?
 
@@ -362,8 +370,9 @@ It's running live in one production project (the Polymarket research repo where 
 | [docs/architecture.md](docs/architecture.md) | Why Cortex exists. Three failure modes. Design decisions. Rejected paths. Cortex vs Palace. |
 | [docs/authoring.md](docs/authoring.md) | How to write tripwires, rules, cost components, synthesis rules, verifiers, violation patterns. Includes a "should this be a tripwire?" decision tree. |
 | [docs/hooks.md](docs/hooks.md) | Claude Code hook contract. Environment variables. Manual testing. Five troubleshooting recipes. |
+| [BENCHMARKS.md](BENCHMARKS.md) | Real latency / storage / brief-size / token-impact numbers from the live store. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Five ground rules. Dev setup. PR checklist. |
-| [CHANGELOG.md](CHANGELOG.md) | Day 1-6 feature history with rejected-path post-mortems. |
+| [CHANGELOG.md](CHANGELOG.md) | Day 1-8 feature history with rejected-path post-mortems. |
 
 ---
 
@@ -384,6 +393,7 @@ It's running live in one production project (the Polymarket research repo where 
 | `cortex inbox show <draft_id>` | Show one draft with full JSON and TODO/MISSING markers |
 | `cortex inbox approve <draft_id> [--force]` | Promote a draft to the tripwire store |
 | `cortex inbox reject <draft_id>` | Delete a draft without promoting |
+| `cortex bench [--iterations N] [--no-subprocess] [--json]` | Benchmark subsystem latency, storage footprint, brief sizes |
 | `cortex-hook` | `UserPromptSubmit` hook entry point |
 | `cortex-watch` | `PostToolUse` audit hook entry point |
 | `cortex-check-lookahead --features-dir DIR` | Standalone lookahead-bug verifier |
