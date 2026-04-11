@@ -151,6 +151,120 @@ def read_last_assistant_text(transcript_path: str | Path | None) -> str:
         return ""
 
 
+def _is_human_user_content(content: object) -> bool:
+    """True if a `type: user` transcript row is a real human prompt
+    rather than a tool_result wrapper from the current agent turn.
+
+    Claude Code stores tool results as `{"type": "user", "message":
+    {"content": [{"type": "tool_result", ...}]}}`. Those messages must
+    NOT reset the "agent turn" boundary, otherwise a prediction emitted
+    in a preamble assistant message earlier in the same turn becomes
+    invisible to the PostToolUse hook.
+
+    Human messages arrive either as a plain string (legacy shape still
+    used in some fixtures) or as a list containing at least one `text`
+    block and no `tool_result` block.
+    """
+    if content is None:
+        return False
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        has_text = False
+        has_tool_result = False
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "tool_result":
+                has_tool_result = True
+            elif btype == "text":
+                t = block.get("text") or ""
+                if t.strip():
+                    has_text = True
+        return has_text and not has_tool_result
+    return False
+
+
+def read_last_prediction_text(transcript_path: str | Path | None) -> str:
+    """Return the text of the most recent assistant message containing
+    a `<cortex_predict>` block **within the current agent turn**.
+
+    The current agent turn is defined as every transcript row appearing
+    after the most recent real human user message. Tool-result user
+    rows are treated as part of the agent turn (they are the agent's
+    own prior tool invocations).
+
+    Why this function exists (Day 14 bug, 2026-04-11): the original
+    `read_last_assistant_text` always returned the *last* assistant
+    row, which fails whenever the agent emits its prediction in a
+    text-only preamble message and then places tool_use blocks in a
+    *later* assistant message of the same turn. By the time the
+    PostToolUse hook fires for the tool_use, "last assistant" is the
+    tool-bearing message, which contains no predict tag, and surprise
+    pairing silently loses the event.
+
+    Returns empty string if no predict block is found, if the file is
+    missing, or on any parse error. Fail-safe: this function must never
+    raise -- the cortex watch hook is in the critical path of every
+    tool call and cannot be allowed to break the harness.
+    """
+    if not transcript_path:
+        return ""
+    try:
+        path = Path(transcript_path)
+        if not path.exists():
+            return ""
+        rows: list[dict[str, Any]] = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+        # Find index just past the most recent real human user msg.
+        turn_start = 0
+        for i in range(len(rows) - 1, -1, -1):
+            row = rows[i]
+            if row.get("type") != "user":
+                continue
+            msg = row.get("message") or {}
+            if _is_human_user_content(msg.get("content")):
+                turn_start = i + 1
+                break
+
+        # Scan the current agent turn for the latest assistant text
+        # that carries a cortex_predict block.
+        last_predict_text = ""
+        for row in rows[turn_start:]:
+            if row.get("type") != "assistant":
+                continue
+            msg = row.get("message") or {}
+            content = msg.get("content")
+            text_chunks: list[str] = []
+            if isinstance(content, str):
+                text_chunks.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "text":
+                        continue
+                    t = block.get("text") or ""
+                    if t:
+                        text_chunks.append(t)
+            joined = "\n".join(text_chunks)
+            if joined and "<cortex_predict>" in joined:
+                last_predict_text = joined
+        return last_predict_text
+    except Exception:
+        return ""
+
+
 # ---- prediction/outcome pairing ----
 
 

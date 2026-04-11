@@ -41,17 +41,26 @@ def main() -> int:
         snippet = summarize_tool_input(tool_name, tool_input)
         response_snippet = _summarize_tool_response(payload.get("tool_response"))
 
-        # Day 14: Surprise Engine. If the transcript shows a
-        # <cortex_predict> tag in the last assistant message, log it as
-        # a `prediction` event BEFORE the `tool_call` event so the
-        # `cortex surprise` collector can pair them by forward-scan.
+        # Day 14: Surprise Engine. Scan the CURRENT agent turn (every
+        # assistant message since the last real human user prompt) for
+        # a <cortex_predict> block and log it as a `prediction` event
+        # BEFORE the `tool_call` event so the `cortex surprise`
+        # collector can pair them by forward-scan.
+        #
+        # We cannot just look at the last assistant message: the agent
+        # often emits predict in a text-only preamble and only issues
+        # tool_use in a LATER message of the same turn. The original
+        # `read_last_assistant_text` path missed every such case and
+        # left the Surprise Engine starved of data (Day 14 bug, found
+        # 2026-04-11 during live validation).
+        #
         # De-duplicated against the most recent prediction in the
         # session log to avoid multi-tool_use messages writing N copies.
         try:
-            from cortex.surprise import parse_prediction, read_last_assistant_text
+            from cortex.surprise import parse_prediction, read_last_prediction_text
 
             transcript_path = payload.get("transcript_path")
-            assistant_text = read_last_assistant_text(transcript_path)
+            assistant_text = read_last_prediction_text(transcript_path)
             prediction = parse_prediction(assistant_text)
             if prediction is not None and not _already_logged(
                 session_id, read_session, prediction

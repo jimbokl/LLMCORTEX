@@ -130,6 +130,131 @@ def test_watch_dedup_prediction_across_multiple_tool_calls(tmp_path, monkeypatch
     assert kinds.count("tool_call") == 2
 
 
+def test_watch_captures_predict_from_earlier_turn_message(tmp_path, monkeypatch):
+    """Day 14 bug regression: agent emits <cortex_predict> in a
+    text-only preamble message, then tool_use fires in a LATER
+    assistant message of the same agent turn. The prediction must
+    still be logged when PostToolUse runs."""
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))
+    transcript = tmp_path / "t.jsonl"
+    rows = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "do X"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Preamble.\n<cortex_predict>"
+                            "<outcome>all green</outcome>"
+                            "<failure_mode>env broken</failure_mode>"
+                            "</cortex_predict>"
+                        ),
+                    },
+                ],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Running Bash now."},
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ],
+            },
+        },
+    ]
+    with open(transcript, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    payload = {
+        "session_id": "sess-predict-earlier",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo hi"},
+        "transcript_path": str(transcript),
+    }
+    assert _run_watch(json.dumps(payload)) == 0
+    events = read_session("sess-predict-earlier")
+    kinds = [e["event"] for e in events]
+    assert kinds == ["prediction", "tool_call"]
+    assert events[0]["outcome"] == "all green"
+    assert events[0]["failure_mode"] == "env broken"
+
+
+def test_watch_ignores_predict_from_previous_human_turn(tmp_path, monkeypatch):
+    """Day 14 scope guard: a prediction from a previous agent turn
+    (before a new human message) must NOT be paired with the current
+    tool call -- it would pollute the surprise log with cross-task
+    noise."""
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))
+    transcript = tmp_path / "t.jsonl"
+    rows = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "first task"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "<cortex_predict>"
+                            "<outcome>stale</outcome>"
+                            "<failure_mode>old</failure_mode>"
+                            "</cortex_predict>"
+                        ),
+                    },
+                ],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "new task"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "no predict here"},
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ],
+            },
+        },
+    ]
+    with open(transcript, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    payload = {
+        "session_id": "sess-stale-predict",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo hi"},
+        "transcript_path": str(transcript),
+    }
+    assert _run_watch(json.dumps(payload)) == 0
+    events = read_session("sess-stale-predict")
+    kinds = [e["event"] for e in events]
+    assert kinds == ["tool_call"]
+
+
 def test_watch_no_prediction_when_transcript_absent(tmp_path, monkeypatch):
     """No transcript_path -> no prediction event, still logs tool_call."""
     monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path))

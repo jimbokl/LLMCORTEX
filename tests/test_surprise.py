@@ -125,6 +125,225 @@ def test_read_last_assistant_text_missing_file_returns_empty(tmp_path):
     assert surprise.read_last_assistant_text(None) == ""
 
 
+def _write_jsonl(path, rows):
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+
+def test_read_last_prediction_text_finds_predict_in_earlier_turn_message(tmp_path):
+    """Day 14 bug fix: when the agent emits <cortex_predict> in a
+    text-only preamble message and the tool_use lands in a later
+    assistant message of the SAME agent turn, the predict must still
+    be discoverable by the PostToolUse hook."""
+    transcript = tmp_path / "t.jsonl"
+    rows = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "do something"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Preamble.\n<cortex_predict>"
+                            "<outcome>all green</outcome>"
+                            "<failure_mode>env broken</failure_mode>"
+                            "</cortex_predict>"
+                        ),
+                    },
+                ],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Running."},
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ],
+            },
+        },
+    ]
+    _write_jsonl(transcript, rows)
+    text = surprise.read_last_prediction_text(str(transcript))
+    assert "<cortex_predict>" in text
+    assert "all green" in text
+
+
+def test_read_last_prediction_text_stops_at_new_human_msg(tmp_path):
+    """A predict from a previous agent turn (before a new human msg)
+    must NOT be returned -- it belongs to a stale task."""
+    transcript = tmp_path / "t.jsonl"
+    rows = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "first task"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "<cortex_predict>"
+                            "<outcome>stale prediction</outcome>"
+                            "<failure_mode>old</failure_mode>"
+                            "</cortex_predict>"
+                        ),
+                    },
+                ],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "new task"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Working on new task."},
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ],
+            },
+        },
+    ]
+    _write_jsonl(transcript, rows)
+    assert surprise.read_last_prediction_text(str(transcript)) == ""
+
+
+def test_read_last_prediction_text_tool_result_does_not_reset_turn(tmp_path):
+    """Tool-result user messages are part of the agent's own turn and
+    must NOT reset the turn boundary."""
+    transcript = tmp_path / "t.jsonl"
+    rows = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "go"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "<cortex_predict>"
+                            "<outcome>good</outcome>"
+                            "<failure_mode>bad</failure_mode>"
+                            "</cortex_predict>"
+                        ),
+                    },
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "content": "done"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "next step"},
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ],
+            },
+        },
+    ]
+    _write_jsonl(transcript, rows)
+    text = surprise.read_last_prediction_text(str(transcript))
+    assert "<cortex_predict>" in text
+    assert "good" in text
+
+
+def test_read_last_prediction_text_legacy_string_user_content(tmp_path):
+    """Legacy transcripts where user.content is a bare string (not a
+    list of blocks) must still be recognized as real human messages."""
+    transcript = tmp_path / "t.jsonl"
+    rows = [
+        {"type": "user", "message": {"content": "first task"}},
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "<cortex_predict>"
+                            "<outcome>x</outcome>"
+                            "<failure_mode>y</failure_mode>"
+                            "</cortex_predict>"
+                        ),
+                    },
+                ],
+            },
+        },
+    ]
+    _write_jsonl(transcript, rows)
+    text = surprise.read_last_prediction_text(str(transcript))
+    assert "<cortex_predict>" in text
+
+
+def test_read_last_prediction_text_returns_empty_when_no_predict(tmp_path):
+    transcript = tmp_path / "t.jsonl"
+    rows = [
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "go"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "no prediction here"},
+                    {"type": "tool_use", "name": "Bash", "input": {}},
+                ],
+            },
+        },
+    ]
+    _write_jsonl(transcript, rows)
+    assert surprise.read_last_prediction_text(str(transcript)) == ""
+
+
+def test_read_last_prediction_text_missing_file_returns_empty(tmp_path):
+    assert surprise.read_last_prediction_text(tmp_path / "nope.jsonl") == ""
+    assert surprise.read_last_prediction_text("") == ""
+    assert surprise.read_last_prediction_text(None) == ""
+
+
 def test_read_last_assistant_text_tolerates_bad_lines(tmp_path):
     transcript = tmp_path / "t.jsonl"
     transcript.write_text(
