@@ -595,6 +595,197 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------
+# Day 16: DMN promoter CLI
+# --------------------------------------------------------------------
+
+
+def cmd_promote_classify(args: argparse.Namespace) -> int:
+    """Classify unclassified surprise pairs via Haiku."""
+    from datetime import datetime, timezone
+
+    from cortex import promoter
+    from cortex.surprise import collect_pairs
+
+    pairs = collect_pairs(days=args.days)
+    if not pairs:
+        print(f"No surprise pairs found in the last {args.days} days.")
+        return 0
+
+    with _open(args) as store:
+        existing = store.list_pair_classifications()
+        existing_keys = {(r["session_id"], r["at"]) for r in existing}
+        to_classify = [
+            p for p in pairs if (p["session_id"], p["at"]) not in existing_keys
+        ]
+        if not to_classify:
+            print(
+                f"All {len(pairs)} pair(s) already classified -- nothing to do."
+            )
+            return 0
+
+        # Hard cap at 200 per invocation to keep bill shock impossible.
+        batch_size = min(args.batch_size, 200)
+        to_classify = to_classify[:batch_size]
+
+        est_cost = len(to_classify) * 0.0002  # Haiku 4.5 ~rough estimate
+        print(
+            f"Will classify {len(to_classify)} pair(s) "
+            f"(of {len(pairs)} total, {len(existing)} already on record). "
+            f"Estimated cost: ~${est_cost:.4f}."
+        )
+        if args.dry_run:
+            print("[dry run] no Haiku calls, no DB writes.")
+            for p in to_classify[:5]:
+                print(
+                    f"  - {p['session_id'][:12]} at {p['at'][:19]} "
+                    f"tool={p['tool_name']}"
+                )
+            if len(to_classify) > 5:
+                print(f"  ... and {len(to_classify) - 5} more")
+            return 0
+
+        if len(to_classify) > 10 and not args.yes:
+            print(
+                "Pass --yes to confirm; refusing to spend >$0.002 "
+                "implicitly. Use --batch-size to narrow the window."
+            )
+            return 1
+
+        classified = 0
+        errors = 0
+        for pair in to_classify:
+            result = promoter.classify_pair(pair, model=args.model)
+            if result["label"] == "error":
+                errors += 1
+            classified_at = datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            )
+            store.upsert_pair_classification(
+                session_id=pair["session_id"],
+                at=pair["at"],
+                tripwire_ids=pair.get("tripwire_ids") or [],
+                label=result["label"],
+                confidence=result.get("confidence", 0.0),
+                reasoning=result.get("reasoning", ""),
+                model=result.get("model", args.model),
+                classified_at=classified_at,
+            )
+            classified += 1
+
+    print(
+        f"Classified {classified} pair(s), errors={errors}. "
+        f"See `cortex stats --sessions` for updated fitness."
+    )
+    return 0
+
+
+def cmd_promote_run(args: argparse.Namespace) -> int:
+    """Run the promoter decider and optionally apply decisions."""
+    from cortex import promoter
+    from cortex.fitness import compute_fitness
+    from cortex.stats import collect_sessions
+
+    sessions = collect_sessions(days=args.days)
+
+    with _open(args) as store:
+        all_tripwires = store.list_tripwires(status=None)
+        bodies = {tw["id"]: tw.get("body") or "" for tw in all_tripwires}
+        costs = {
+            tw["id"]: float(tw.get("cost_usd") or 0.0) for tw in all_tripwires
+        }
+        classifications = store.list_pair_classifications()
+        cls_index: dict[tuple[str, str], str] = {
+            (r["session_id"], r["at"]): r["label"] for r in classifications
+        }
+        fitness = compute_fitness(
+            sessions,
+            tripwire_bodies=bodies,
+            tripwire_costs=costs,
+            classification_index=cls_index,
+        )
+
+        distinct_sessions = {
+            tw_id: int(row.get("distinct_sessions", 0) or 0)
+            for tw_id, row in fitness.items()
+        }
+        mismatches = {
+            tw_id: int(row.get("mismatches", 0) or 0)
+            for tw_id, row in fitness.items()
+        }
+
+        status_history: dict[str, list[dict]] = {}
+        for tw in all_tripwires:
+            status_history[tw["id"]] = store.list_status_changes(
+                tripwire_id=tw["id"]
+            )
+
+        decisions = promoter.decide(
+            tripwires=all_tripwires,
+            fitness=fitness,
+            distinct_sessions=distinct_sessions,
+            mismatches=mismatches,
+            status_history=status_history,
+        )
+
+        if not decisions:
+            print("No promotion/demotion decisions -- everything stable.")
+            return 0
+
+        session_id = args.session_id or "promoter_run"
+        results = promoter.apply_decisions(
+            store,
+            decisions,
+            session_id=session_id,
+            dry_run=not args.apply,
+        )
+
+    header = "APPLIED" if args.apply else "DRY RUN (use --apply to mutate)"
+    print(f"Promoter {header}:")
+    for r in results:
+        tag = "OK" if r.applied else f"SKIP[{r.skip_reason}]"
+        print(
+            f"  [{tag:<22}] {r.tripwire_id:<30} "
+            f"{r.from_status:>8} -> {r.to_status:<8} ({r.reason})"
+        )
+    return 0
+
+
+def cmd_promote_log(args: argparse.Namespace) -> int:
+    """Show recent status_changes audit rows."""
+    from datetime import datetime, timedelta, timezone
+
+    since: str | None = None
+    if args.days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
+        since = cutoff.isoformat(timespec="seconds")
+
+    with _open(args) as store:
+        rows = store.list_status_changes(since_iso=since)
+
+    if not rows:
+        print("(no status changes recorded)")
+        return 0
+
+    header = (
+        f"Status changes (last {args.days} days):"
+        if args.days is not None
+        else "Status changes (all time):"
+    )
+    print(header)
+    print("-" * 80)
+    for r in rows:
+        meta = r.get("metadata") or {}
+        fit = meta.get("fitness")
+        fit_str = f" fit={fit:+.2f}" if isinstance(fit, (int, float)) else ""
+        print(
+            f"  {r['at']:<25} {r['tripwire_id']:<28} "
+            f"{r['from_status']:>8} -> {r['to_status']:<8} "
+            f"({r['reason']}){fit_str}"
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="cortex",
@@ -939,6 +1130,99 @@ def build_parser() -> argparse.ArgumentParser:
         help="New lifecycle status",
     )
     st.set_defaults(func=cmd_status)
+
+    # ---- Day 16: DMN promoter ----
+    promo = sub.add_parser(
+        "promote",
+        help=(
+            "DMN promoter: classify surprise pairs via Haiku and "
+            "promote/demote tripwires between active/shadow/archived "
+            "based on composite fitness"
+        ),
+    )
+    promo_sub = promo.add_subparsers(dest="promote_cmd", required=True)
+
+    pc = promo_sub.add_parser(
+        "classify",
+        help="Classify unclassified surprise pairs via Haiku",
+    )
+    pc.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="How many days of session history to scan (default: 7)",
+    )
+    pc.add_argument(
+        "--batch-size",
+        type=int,
+        default=50,
+        dest="batch_size",
+        help=(
+            "Max number of pairs to classify in one invocation "
+            "(default: 50, hard cap: 200)"
+        ),
+    )
+    pc.add_argument(
+        "--model",
+        default="claude-haiku-4-5",
+        help="Anthropic model id (default: claude-haiku-4-5)",
+    )
+    pc.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Preview what would be classified without calling Haiku",
+    )
+    pc.add_argument(
+        "--yes",
+        action="store_true",
+        help="Auto-confirm when more than 10 pairs would be classified",
+    )
+    pc.set_defaults(func=cmd_promote_classify)
+
+    pr = promo_sub.add_parser(
+        "run",
+        help=(
+            "Compute promotion/demotion decisions from current fitness "
+            "and (with --apply) mutate the store"
+        ),
+    )
+    pr.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="Fitness window in days (default: 7)",
+    )
+    pr.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Actually mutate the store. Without this flag the run is "
+            "dry: decisions are printed but nothing is written."
+        ),
+    )
+    pr.add_argument(
+        "--session-id",
+        default=None,
+        dest="session_id",
+        help=(
+            "Session id to write the status_change audit events to. "
+            "Defaults to 'promoter_run'."
+        ),
+    )
+    pr.set_defaults(func=cmd_promote_run)
+
+    pl = promo_sub.add_parser(
+        "log",
+        help="Show recent status_changes audit rows",
+    )
+    pl.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Window in days (default: all time)",
+    )
+    pl.set_defaults(func=cmd_promote_log)
 
     return p
 
