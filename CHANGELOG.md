@@ -166,6 +166,61 @@ Modules covered: `store`, `importers/memory_md`, `classify`, `hook`,
 `synthesize`, `verifiers/check_feature_lookahead`, `session`, `watch`,
 `tfidf_fallback`, `stats`, `violation_detect`, `verify_runner`.
 
+### Day 9 — auto-regex pattern-suggest helper
+
+**`cortex suggest-patterns <tripwire_id> [--fix-example "..."]`** reads
+session logs for past injections of a tripwire, extracts the `tool_call`
+events that followed, and **auto-generates regex candidates** for
+`violation_patterns`. No more hand-writing regexes while staring at
+snippets.
+
+- **`cortex/suggest_patterns.py`**: 380-line module. Core primitives:
+  - `collect_post_injection_snippets(tripwire_id, window)` — reads all
+    session logs, finds `inject` / `keyword_fallback` events for the
+    given tripwire, collects the next `window` `tool_call` events per
+    injection
+  - `analyze_snippets(findings)` — aggregates by tool_name, extracts
+    common identifiers, builds `snippets_by_tool` dict
+  - `_longest_common_substring(a, b)` — classic O(m*n) DP
+  - `_lcs_across(snippets)` — iterative pair-wise LCS over N snippets
+  - `_generalize_to_regex(text)` — escape metacharacters, then replace
+    runs of spaces with `\\s*` and runs of digits with `\\d+`
+  - `generate_regex_candidate(snippets, fix_example)` — LCS + generalize,
+    verify the regex actually matches all input snippets (if the
+    generalization broke matching, fall back to plain escaped anchor),
+    score confidence (HIGH/MEDIUM/LOW based on anchor length + match
+    count), optionally verify the regex does NOT match a known fix
+    example and downgrade confidence to LOW if it does
+  - `generate_regex_candidates(analysis, fix_example)` — produce one
+    global candidate and one per-tool candidate (for tools with >=2
+    snippets)
+- **`--fix-example "..."` flag**: lets the user supply a known-fix
+  string. The tool verifies each candidate does NOT match the fix; any
+  candidate that does match gets marked `[LOW CONFIDENCE]` with a
+  `fix: MATCHES the given fix example — too broad, narrow manually`
+  footnote.
+- **`render_suggestions()` output** leads with `Auto-generated regex
+  candidates` section (confidence tag, anchor, regex, match count, fix
+  verification), followed by the raw tool call distribution + snippet
+  dump + common identifiers for human inspection.
+- **Live smoke on real session logs**: found 16 past injections of
+  `lookahead_parquet`, generated a `[HIGH]` Edit candidate containing
+  the exact `(df['ts'] // 300) * 300` pattern from Day 6 smoke tests.
+  When re-run with `--fix-example "...// 300) * 300 + 300"`, the
+  candidate was correctly downgraded to `[LOW]` with the "too broad"
+  warning. End-to-end workflow verified.
+- +31 tests (225 total). `test_suggest_patterns.py` covers the
+  session-scan + analyze path; `test_suggest_patterns_regex.py`
+  covers LCS + generalize + candidate generation + fix-example logic.
+
+**Why this matters**: after a week of real Cortex usage, the user's
+session logs contain hundreds of real `tool_input` snippets tied to
+tripwire injections. Instead of writing regexes by hand, the user now
+runs `cortex suggest-patterns <id>`, gets a concrete candidate ready to
+paste into `cortex/importers/memory_md.py`, verifies it against a known
+fix with one flag, and ships. The Day 6 silent violation detection
+machinery now has a data-driven authoring path.
+
 ### Day 8.5 — benchmark suite
 
 **Measured answers instead of hand-waved claims.**

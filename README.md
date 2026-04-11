@@ -394,6 +394,7 @@ It's running live in one production project (the Polymarket research repo where 
 | `cortex inbox approve <draft_id> [--force]` | Promote a draft to the tripwire store |
 | `cortex inbox reject <draft_id>` | Delete a draft without promoting |
 | `cortex bench [--iterations N] [--no-subprocess] [--json]` | Benchmark subsystem latency, storage footprint, brief sizes |
+| `cortex suggest-patterns <tripwire_id> [--fix-example "..."]` | Auto-generate regex candidates for `violation_patterns` from past session log data |
 | `cortex-hook` | `UserPromptSubmit` hook entry point |
 | `cortex-watch` | `PostToolUse` audit hook entry point |
 | `cortex-check-lookahead --features-dir DIR` | Standalone lookahead-bug verifier |
@@ -442,16 +443,26 @@ backtest-vs-prod comparison, feature pipelines).
   the Palace → Cortex knowledge transfer loop with a human in the loop,
   and provides the substrate for Day 9 DMN proposals.
 
-**Day 9+** (not yet shipped):
+**Day 9 — shipped**:
+
+- **Auto-regex pattern-suggest helper** — `cortex suggest-patterns <id>`
+  reads session logs for past injections, extracts tool_calls that
+  followed, runs LCS + digit/whitespace generalization, and emits
+  ready-to-paste regex candidates with HIGH/MEDIUM/LOW confidence.
+  The optional `--fix-example "snippet"` flag verifies the candidate
+  does NOT match a known fix pattern — candidates that do are
+  automatically downgraded to `[LOW CONFIDENCE]`. No more hand-writing
+  regexes while staring at snippets.
+
+**Day 10+** (not yet shipped):
 
 - **Weekly DMN reflection loop** — cheap LLM (Haiku) processes session
   logs and proposes new tripwires straight into the inbox
-- **Pattern authoring helper** — `cortex suggest-patterns <tripwire_id>`
-  reads session logs and proposes regex candidates from observed
-  violations the user retroactively marks
 - **Verifier blocking mode** — when a `critical` pre-flight verifier
   fails, return a non-zero hook exit so Claude Code surfaces a hard
   stop rather than advisory context
+- **`cortex serve` daemon** — long-running process that keeps Python
+  warm, dropping subprocess cold start from ~60ms to <5ms
 - **PyPI release**
 
 ---

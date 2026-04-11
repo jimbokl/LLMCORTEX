@@ -246,6 +246,42 @@ shows it in the effectiveness report.
 
 Your patterns match against this summary, not the raw tool input.
 
+### Auto-generating patterns from session data (Day 9)
+
+After a week of real usage, the `violation_patterns` you need are
+discoverable from the session logs. Run:
+
+```bash
+cortex suggest-patterns <tripwire_id>
+```
+
+The tool reads all session logs, finds past injections of the given
+tripwire, collects the tool_calls that followed, and emits auto-regex
+candidates using a longest-common-substring + generalization heuristic.
+Output includes HIGH/MEDIUM/LOW confidence tags.
+
+If you already know what a correct fix looks like, pass it as
+`--fix-example` and the tool will verify the candidate does NOT match
+the fix:
+
+```bash
+cortex suggest-patterns lookahead_parquet \
+  --fix-example "file=DETECTOR/backfill.py | old=old | new=df['slot_ts'] = (df['ts'] // 300) * 300 + 300"
+```
+
+Any candidate that matches the fix is flagged `[LOW CONFIDENCE]` and
+annotated `fix: MATCHES the given fix example — too broad, narrow
+manually`. That's your cue to add a negative lookahead for the
+forward-shift signature (the trailing `+ \d+` in this example).
+
+The full workflow:
+
+1. `cortex stats --sessions` shows a `[WARN]` or `[FAIL]` tripwire
+2. `cortex suggest-patterns <id> --fix-example "<known fix>"`
+3. Copy the HIGH/MEDIUM candidate into `cortex/importers/memory_md.py`
+4. `cortex migrate`
+5. `cortex stats --sessions` now reports an effectiveness rate
+
 ### Pattern authoring tips
 
 - **Test patterns before shipping.** The regex engine can backtrack in

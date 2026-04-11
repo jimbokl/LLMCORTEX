@@ -363,6 +363,31 @@ def cmd_inbox_approve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_suggest_patterns(args: argparse.Namespace) -> int:
+    from cortex.suggest_patterns import (
+        analyze_snippets,
+        collect_post_injection_snippets,
+        generate_regex_candidates,
+        render_suggestions,
+    )
+
+    findings = collect_post_injection_snippets(
+        args.tripwire_id, window=args.window,
+    )
+    analysis = analyze_snippets(findings)
+    candidates = generate_regex_candidates(analysis, fix_example=args.fix_example)
+    print(
+        render_suggestions(
+            args.tripwire_id,
+            findings,
+            analysis,
+            candidates=candidates,
+            fix_example=args.fix_example,
+        )
+    )
+    return 0
+
+
 def cmd_bench(args: argparse.Namespace) -> int:
     from cortex.bench import render_report, run_benchmarks
 
@@ -533,6 +558,37 @@ def build_parser() -> argparse.ArgumentParser:
     irj = inbox_sub.add_parser("reject", help="Delete a draft without promoting it")
     irj.add_argument("draft_id", help="Draft id to reject")
     irj.set_defaults(func=cmd_inbox_reject)
+
+    # ---- Day 9: pattern authoring helper ----
+    spp = sub.add_parser(
+        "suggest-patterns",
+        help=(
+            "Read session logs, surface past tool_calls that followed "
+            "injections of a tripwire, highlight recurring identifiers "
+            "as regex anchors"
+        ),
+    )
+    spp.add_argument(
+        "tripwire_id",
+        help="Tripwire to analyze (see `cortex list` or `cortex stats --sessions`)",
+    )
+    spp.add_argument(
+        "--window",
+        type=int,
+        default=10,
+        help="Number of events after each inject to scan (default: 10)",
+    )
+    spp.add_argument(
+        "--fix-example",
+        default=None,
+        dest="fix_example",
+        help=(
+            "Optional known-fix snippet. If provided, cortex verifies the "
+            "generated regex does NOT match this string. Candidates that DO "
+            "match the fix are marked [LOW CONFIDENCE] in the output."
+        ),
+    )
+    spp.set_defaults(func=cmd_suggest_patterns)
 
     # ---- Day 8.5: benchmarks ----
     bp = sub.add_parser(
