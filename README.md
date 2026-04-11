@@ -225,6 +225,59 @@ Fifty-seven cents a year to keep your tripwire set growing from real session dat
 | Ruff clean | every file |
 | Fail-open paths | covered by `test_hook.py` + `test_watch.py` |
 
+## In production (13 days, audit log receipts)
+
+Cortex has been wired into a live Claude Code project via `UserPromptSubmit` + `PostToolUse` hooks since Day 7. Everything below is real audit-log data, pulled from `cortex stats --sessions --anonymize` — safe to share publicly (session ids hashed, tool_input snippets redacted).
+
+### Headline numbers
+
+| Metric | Value |
+|---|---:|
+| `cortex_brief` injected into the agent's context | **20 primary + 21 fallback = 41 times** |
+| Synthesizer fires on real prompts | **16 times** |
+| Silent violations detected by `cortex-watch` | 1 (one deliberate Day-6 test case) |
+| Top-fired tripwire | `poly_fee_empirical` — **33 hits** ($500 past cost) |
+| Runner-up | `real_entry_price` — **29 hits** (critical) |
+| Third | `backtest_must_match_prod` — **24 hits** (critical) |
+| Cold tripwires (never matched) | 2 — candidates for retirement |
+
+### Primary vs fallback — the empirical architecture decision
+
+On Day 4 I almost built a Palace semantic-search daemon (350 LOC + ONNX + HTTP daemon). Killed it the same day and replaced it with a 130-line TF-IDF scorer over tripwire bodies. **5 days of production audit data tell me that was the right call**: the fallback picks up briefs the rule engine missed in **10 of 17 active sessions**. In raw event counts the fallback fires as often as the primary (ratio ~1.05×). Without Day 4, half of all injections wouldn't exist.
+
+This is the meta-case Cortex catches on itself: **the tool detected its own rule-engine blind spot via the same audit log it uses to catch agent failures**. See [the 3.6× ratio blog post](docs/blog/2026-04-11-the-36x-ratio.md) for the full story.
+
+### Real session timeline excerpt (anonymized)
+
+One live session, pulled verbatim from `cortex timeline <sid> --anonymize`:
+
+```
+Session timeline: anon_c729080f
+  (showing first 12 of 176 events)
+==================================================================
+  +00:00:00  INJECT      rules=poly_live_deploy
+             5 tripwires: poly_fee_empirical, never_single_strategy,
+                          lookahead_parquet, backtest_must_match_prod,
+                          no_budget_paper
+  +00:26:37  INJECT      rules=backtest_vs_prod_match,poly_late_lock,poly_fee_pnl
+             5 tripwires: poly_fee_empirical, lookahead_parquet,
+                          backtest_must_match_prod, real_entry_price,
+                          adverse_selection_maker  [SYNTH]
+  +00:31:03  FALLBACK    2 tripwires: backtest_must_match_prod, never_single_strategy
+  +00:59:21  INJECT      rules=poly_fee_pnl
+             2 tripwires: poly_fee_empirical, real_entry_price
+```
+
+One anonymized real session, 60 minutes of work, **three distinct inject events** plus one TF-IDF fallback. Second inject fired the **synthesizer** (`[SYNTH]` marker) — compound rule match across `backtest_vs_prod_match + poly_late_lock + poly_fee_pnl` triggered the cost-component composition for the first time on a real prompt, not a test.
+
+**That's what "active instinct" looks like when it works.** Not "the tool saved $N" (counterfactual — impossible to prove). Just: the agent walked into three separate task shapes pre-briefed with the right lessons, automatically, in 60 minutes of real work.
+
+### What the data doesn't yet show
+
+Per-tripwire violation rate stays at 0.0 for most lessons because **only 2 of 13 seeded tripwires have `violation_patterns`**. Silent-violation detection needs regex to match against tool_input, and regex authoring is still partially manual (Day 9 `cortex suggest-patterns` auto-generates candidates from session data; it needs a few more weeks of real usage to produce high-confidence regexes for the remaining 11 tripwires).
+
+The honest headline: **we can measure what gets injected, we can't yet measure what gets prevented.** That's a known limitation, documented in [BENCHMARKS.md](BENCHMARKS.md) and on the Day-13+ roadmap.
+
 ## The six layers of defense
 
 Cortex is not one more rule engine. It's six independent subsystems over a single 80 KB SQLite store, each targeting a different failure mode:

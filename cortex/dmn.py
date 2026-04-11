@@ -67,9 +67,15 @@ def build_session_summary(
       - top_tools (list[(name, count)])
       - cold_tripwires (list[id])
       - n_silent_violations (int)
+      - primary_vs_fallback (dict: inject_events, fallback_events, ratio)
+      - example_injection (one concrete recent inject as a grounding
+        example for Haiku; None if no real injection exists)
     """
+    from cortex.stats import compute_primary_vs_fallback_ratio
+
     sessions = collect_sessions(days=days)
     stats = compute_stats(sessions)
+    ratio = compute_primary_vs_fallback_ratio(sessions)
 
     db = db_path or find_db()
     store = CortexStore(db)
@@ -84,6 +90,27 @@ def build_session_summary(
 
     def _top(counter: dict, k: int) -> list[tuple[str, int]]:
         return sorted(counter.items(), key=lambda x: -x[1])[:k]
+
+    # Find the most recent real inject event across sessions, to embed
+    # as a concrete grounding example in the Haiku prompt. Skips test
+    # and benchmark sessions by their filename prefix.
+    example_injection: dict[str, Any] | None = None
+    for sid, events in reversed(sessions):
+        if any(sid.startswith(p) for p in (
+            "bench", "day6-", "demo-", "fb-", "live-test", "poly-live",
+            "d7-", "fallback-",
+        )):
+            continue
+        for e in reversed(events):
+            if e.get("event") == "inject":
+                example_injection = {
+                    "matched_rules": e.get("matched_rules") or [],
+                    "tripwire_ids": e.get("tripwire_ids") or [],
+                    "synthesis_fired": bool(e.get("synthesis_ids")),
+                }
+                break
+        if example_injection:
+            break
 
     n_sessions = stats["n_sessions"]
     sessions_silent = (
@@ -106,6 +133,8 @@ def build_session_summary(
         "n_silent_violations": sum(
             (stats.get("potential_violations") or {}).values()
         ),
+        "primary_vs_fallback": ratio,
+        "example_injection": example_injection,
     }
 
 
@@ -197,6 +226,36 @@ def build_prompt(
         lines.append("Cold tripwires (never matched in window):")
         for tw_id in s["cold_tripwires"]:
             lines.append(f"  - {tw_id}")
+        lines.append("")
+
+    # Primary vs fallback ratio (Day 13 enrichment)
+    pf = s.get("primary_vs_fallback") or {}
+    if pf and (pf.get("inject_events") or 0) + (pf.get("fallback_events") or 0) > 0:
+        lines.append("Primary rule engine vs TF-IDF fallback:")
+        lines.append(f"  - Primary `inject` events:       {pf.get('inject_events', 0)}")
+        lines.append(f"  - Keyword `fallback` events:     {pf.get('fallback_events', 0)}")
+        r = pf.get("fallback_to_inject_ratio")
+        if r is not None:
+            lines.append(f"  - Fallback / primary ratio:      {r}x")
+            if r > 2:
+                lines.append(
+                    "  - Interpretation: the hand-written rule engine "
+                    "vocabulary is too narrow; most briefs come from TF-IDF "
+                    "body scoring. New tripwires should prefer broad, "
+                    "commonly-used keywords in their triggers so the primary "
+                    "rules catch more."
+                )
+        lines.append("")
+
+    # Concrete grounding example (Day 13 enrichment) -- give Haiku one
+    # real injection event so it can see what the schema looks like in
+    # production, not just the abstract description.
+    example = s.get("example_injection")
+    if example:
+        lines.append("Example of a recent real injection (for grounding):")
+        lines.append(f"  matched_rules:   {example.get('matched_rules')}")
+        lines.append(f"  tripwire_ids:    {example.get('tripwire_ids')}")
+        lines.append(f"  synthesis_fired: {example.get('synthesis_fired')}")
         lines.append("")
 
     lines.append("## Your task")

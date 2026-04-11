@@ -107,6 +107,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
 def _cmd_stats_sessions(args: argparse.Namespace) -> int:
     from cortex.stats import (
         collect_sessions,
+        compute_primary_vs_fallback_ratio,
         compute_stats,
         find_cold_tripwires,
         render_stats,
@@ -117,7 +118,28 @@ def _cmd_stats_sessions(args: argparse.Namespace) -> int:
     with _open(args) as store:
         all_ids = [tw["id"] for tw in store.list_tripwires()]
     cold = find_cold_tripwires(stats, all_ids)
-    print(render_stats(stats, cold, days=args.days))
+    ratio = compute_primary_vs_fallback_ratio(sessions)
+    print(render_stats(
+        stats, cold, days=args.days,
+        anonymize=getattr(args, "anonymize", False),
+        ratio=ratio,
+    ))
+    return 0
+
+
+def cmd_timeline(args: argparse.Namespace) -> int:
+    from cortex.session import read_session
+    from cortex.stats import render_timeline
+
+    events = read_session(args.session_id)
+    if not events:
+        print(f"No events found for session {args.session_id}", file=sys.stderr)
+        return 1
+    print(render_timeline(
+        args.session_id, events,
+        anonymize=getattr(args, "anonymize", False),
+        max_events=args.max_events,
+    ))
     return 0
 
 
@@ -511,7 +533,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="With --sessions, limit to last N days",
     )
+    stats_p.add_argument(
+        "--anonymize",
+        action="store_true",
+        help=(
+            "With --sessions, hash session ids and redact tool_input "
+            "snippets so the output is safe to share publicly"
+        ),
+    )
     stats_p.set_defaults(func=cmd_stats)
+
+    # Day 13: session timeline view
+    tl = sub.add_parser(
+        "timeline",
+        help="Render a single session's event timeline as ASCII",
+    )
+    tl.add_argument("session_id", help="Session id (see `cortex stats --sessions`)")
+    tl.add_argument(
+        "--anonymize",
+        action="store_true",
+        help="Hash the session id and redact tool_input snippets in output",
+    )
+    tl.add_argument(
+        "--max-events",
+        type=int,
+        default=200,
+        dest="max_events",
+        help="Truncate timeline at N events (default 200)",
+    )
+    tl.set_defaults(func=cmd_timeline)
 
     ip = sub.add_parser(
         "import-palace",

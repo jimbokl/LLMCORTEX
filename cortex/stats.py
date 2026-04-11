@@ -11,6 +11,7 @@ this module by consuming the same event streams.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,47 @@ from pathlib import Path
 from typing import Any
 
 from cortex.session import sessions_dir
+
+# ---- anonymization helpers (Day 13) ----
+
+_ANON_PREFIX = "anon_"
+
+
+def anonymize_session_id(sid: str) -> str:
+    """Hash a session id to a stable short identifier so stats reports
+    can be shared publicly without leaking which project / machine
+    produced them. Uses md5 (not cryptographic, just fast & consistent).
+
+    Same input always produces the same output, so multi-session
+    references stay consistent within one anonymized report.
+    """
+    if not sid:
+        return f"{_ANON_PREFIX}empty"
+    h = hashlib.md5(sid.encode("utf-8")).hexdigest()[:8]
+    return f"{_ANON_PREFIX}{h}"
+
+
+def anonymize_snippet(snippet: str, max_len: int = 60) -> str:
+    """Redact a tool_input snippet for public sharing.
+
+    Keeps the rough shape (file=... | old=... | new=...) but replaces
+    the actual content with ``<REDACTED:NNNchars>`` markers. Identifiers
+    leaking paths, values, or code structure get stripped.
+    """
+    if not snippet:
+        return ""
+    # Preserve the semicolon/pipe-separated sections but redact each value
+    parts = []
+    for segment in snippet.split(" | "):
+        if "=" in segment:
+            key, _, rest = segment.partition("=")
+            parts.append(f"{key}=<REDACTED:{len(rest)}chars>")
+        else:
+            parts.append(f"<REDACTED:{len(segment)}chars>")
+    out = " | ".join(parts)
+    if len(out) > max_len * 3:
+        out = out[: max_len * 3] + "..."
+    return out
 
 
 def _parse_iso(ts: str) -> datetime | None:
@@ -198,16 +240,79 @@ def find_cold_tripwires(
     return sorted(tw_id for tw_id in all_tripwire_ids if tw_id not in hit)
 
 
+def compute_primary_vs_fallback_ratio(
+    sessions: list[tuple[str, list[dict]]],
+) -> dict[str, Any]:
+    """How many sessions triggered primary inject vs keyword_fallback vs both.
+
+    This metric surfaced the Day-4 TF-IDF fallback's empirical value:
+    in real session data the fallback fires more often than the hand-written
+    rule engine. Exposed here so users can see the ratio on their own
+    data.
+    """
+    n_inject_only = 0
+    n_fallback_only = 0
+    n_both = 0
+    n_neither = 0
+    n_inject_events = 0
+    n_fallback_events = 0
+    for _sid, events in sessions:
+        has_inject = False
+        has_fallback = False
+        for e in events:
+            ev = e.get("event", "")
+            if ev == "inject":
+                has_inject = True
+                n_inject_events += 1
+            elif ev == "keyword_fallback":
+                has_fallback = True
+                n_fallback_events += 1
+        if has_inject and has_fallback:
+            n_both += 1
+        elif has_inject:
+            n_inject_only += 1
+        elif has_fallback:
+            n_fallback_only += 1
+        else:
+            n_neither += 1
+
+    ratio = (
+        round(n_fallback_events / n_inject_events, 2)
+        if n_inject_events > 0
+        else None
+    )
+    return {
+        "sessions_inject_only": n_inject_only,
+        "sessions_fallback_only": n_fallback_only,
+        "sessions_both": n_both,
+        "sessions_neither": n_neither,
+        "inject_events": n_inject_events,
+        "fallback_events": n_fallback_events,
+        "fallback_to_inject_ratio": ratio,
+    }
+
+
 def render_stats(
     stats: dict[str, Any],
     cold_tripwires: list[str],
     days: int | None = None,
+    *,
+    anonymize: bool = False,
+    ratio: dict[str, Any] | None = None,
 ) -> str:
     """Render stats dict as a human-readable text report."""
     lines: list[str] = []
     window = f"last {days} days" if days else "all-time"
-    lines.append(f"Cortex session audit ({window})")
+    header = f"Cortex session audit ({window})"
+    if anonymize:
+        header += " [ANONYMIZED]"
+    lines.append(header)
     lines.append("=" * 60)
+    if anonymize:
+        lines.append(
+            "(session ids hashed, tool_input snippets redacted -- safe to share publicly)"
+        )
+        lines.append("")
     lines.append(f"Sessions:                  {stats['n_sessions']}")
     lines.append(f"Total events:              {stats['n_events']}")
 
@@ -308,5 +413,109 @@ def render_stats(
             "  Cold tripwires are candidates for trigger tuning or removal."
         )
         lines.append("")
+
+    # Day 13: primary vs fallback ratio (empirical measure of how much
+    # work the Day-4 TF-IDF fallback is doing relative to the hand-written
+    # rule engine)
+    if ratio and (ratio["inject_events"] > 0 or ratio["fallback_events"] > 0):
+        lines.append("Primary rule engine vs TF-IDF fallback:")
+        lines.append(f"  Primary inject events:       {ratio['inject_events']}")
+        lines.append(f"  Keyword fallback events:     {ratio['fallback_events']}")
+        if ratio["fallback_to_inject_ratio"] is not None:
+            lines.append(
+                f"  Fallback / primary ratio:    {ratio['fallback_to_inject_ratio']}x"
+            )
+        lines.append(f"  Sessions: inject-only={ratio['sessions_inject_only']}, "
+                     f"fallback-only={ratio['sessions_fallback_only']}, "
+                     f"both={ratio['sessions_both']}, "
+                     f"neither={ratio['sessions_neither']}")
+        if ratio["fallback_to_inject_ratio"] and ratio["fallback_to_inject_ratio"] > 2:
+            lines.append(
+                "  (fallback > 2x means the rule engine vocabulary is too "
+                "narrow; most briefs come from TF-IDF body scoring)"
+            )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def render_timeline(
+    session_id: str,
+    events: list[dict[str, Any]],
+    *,
+    anonymize: bool = False,
+    max_events: int = 200,
+) -> str:
+    """Render a single session's events as an ASCII timeline.
+
+    Format:
+      session: <sid>
+      +HH:MM:SS  EVENT_TYPE   short description
+
+    The timeline is relative to the first event in the session so the
+    reader can see the cadence of activity. Used by the `cortex timeline`
+    CLI subcommand and by documentation generators.
+    """
+    if not events:
+        return f"session: {session_id}\n(no events)"
+
+    first_ts = None
+    for e in events:
+        try:
+            first_ts = datetime.fromisoformat(e.get("at", ""))
+            break
+        except (ValueError, TypeError):
+            continue
+
+    lines: list[str] = []
+    display_sid = anonymize_session_id(session_id) if anonymize else session_id
+    lines.append(f"Session timeline: {display_sid}")
+    if len(events) > max_events:
+        lines.append(f"  (showing first {max_events} of {len(events)} events)")
+    lines.append("=" * 66)
+
+    for event in events[:max_events]:
+        ts_str = event.get("at", "")
+        try:
+            ts = datetime.fromisoformat(ts_str)
+            if first_ts:
+                delta = ts - first_ts
+                rel = f"+{int(delta.total_seconds() // 3600):02d}:{int((delta.total_seconds() % 3600) // 60):02d}:{int(delta.total_seconds() % 60):02d}"
+            else:
+                rel = ts.strftime("%H:%M:%S")
+        except (ValueError, TypeError):
+            rel = "?????????"
+
+        ev_type = event.get("event", "?") or "?"
+
+        if ev_type == "inject":
+            rules = event.get("matched_rules") or []
+            tws = event.get("tripwire_ids") or []
+            synth = bool(event.get("synthesis_ids"))
+            synth_tag = "  [SYNTH]" if synth else ""
+            lines.append(f"  {rel}  INJECT      rules={','.join(rules)[:40]}")
+            lines.append(f"             {len(tws)} tripwires: {','.join(tws)[:60]}{synth_tag}")
+        elif ev_type == "keyword_fallback":
+            tws = event.get("tripwire_ids") or []
+            scores = event.get("scores") or []
+            lines.append(f"  {rel}  FALLBACK    {len(tws)} tripwires: {','.join(tws)[:48]}")
+            if scores:
+                lines.append(f"             scores={scores}")
+        elif ev_type == "tool_call":
+            tool = event.get("tool_name", "?") or "?"
+            snippet = event.get("input_snippet", "") or ""
+            if anonymize and snippet:
+                snippet = anonymize_snippet(snippet)
+            elif snippet and len(snippet) > 80:
+                snippet = snippet[:80] + "..."
+            lines.append(f"  {rel}  tool_call   {tool}: {snippet}")
+        elif ev_type == "potential_violation":
+            tw_id = event.get("tripwire_id", "?")
+            lines.append(f"  {rel}  VIOLATION!  {tw_id}")
+        elif ev_type == "verifier_blocked":
+            failed = event.get("failed_tripwires") or []
+            lines.append(f"  {rel}  BLOCKED     verifier fail: {','.join(failed)[:50]}")
+        else:
+            lines.append(f"  {rel}  {ev_type:<12}")
 
     return "\n".join(lines)
