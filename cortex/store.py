@@ -12,9 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _VALID_STATUSES = ("active", "shadow", "archived")
+_VALID_PAIR_LABELS = ("match", "mismatch", "partial", "error")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -72,6 +73,42 @@ CREATE TABLE IF NOT EXISTS violations (
 
 CREATE INDEX IF NOT EXISTS idx_violations_tripwire ON violations(tripwire_id);
 CREATE INDEX IF NOT EXISTS idx_violations_at ON violations(at);
+
+-- Day 16: Surprise pair classifications. Each row is one Haiku call result
+-- for one prediction/tool_call pair. Idempotency via (session_id, at) so
+-- reruns of `cortex promote classify` never re-bill the API.
+CREATE TABLE IF NOT EXISTS pair_classifications (
+    session_id      TEXT NOT NULL,
+    at              TEXT NOT NULL,
+    tripwire_ids    TEXT NOT NULL,
+    label           TEXT NOT NULL CHECK (label IN ('match','mismatch','partial','error')),
+    confidence      REAL NOT NULL,
+    reasoning       TEXT,
+    model           TEXT NOT NULL,
+    classified_at   TEXT NOT NULL,
+    cost_usd        REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pair_cls_label ON pair_classifications(label);
+CREATE INDEX IF NOT EXISTS idx_pair_cls_classified_at ON pair_classifications(classified_at);
+
+-- Day 16: Audit trail for every tripwire status transition. Populated by
+-- `apply_status_transition` (which wraps set_status in the same txn) and
+-- by the DMN promoter. Human-readable via `cortex promote log`.
+CREATE TABLE IF NOT EXISTS status_changes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    tripwire_id     TEXT NOT NULL REFERENCES tripwires(id) ON DELETE CASCADE,
+    from_status     TEXT NOT NULL,
+    to_status       TEXT NOT NULL,
+    reason          TEXT NOT NULL,
+    metadata_json   TEXT,
+    at              TEXT NOT NULL,
+    session_id      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_status_changes_tripwire ON status_changes(tripwire_id);
+CREATE INDEX IF NOT EXISTS idx_status_changes_at ON status_changes(at);
 """
 
 
@@ -109,6 +146,16 @@ class CortexStore:
             if row is None:
                 self.conn.execute(
                     "INSERT INTO schema_version (version) VALUES (?)",
+                    (SCHEMA_VERSION,),
+                )
+            elif int(row["version"]) < SCHEMA_VERSION:
+                # Day 16: bump stored version after an idempotent upgrade.
+                # The _SCHEMA script + _migrate_schema above have already
+                # created any new tables/columns; this UPDATE is just
+                # bookkeeping so `SELECT version FROM schema_version`
+                # reflects reality on migrated stores.
+                self.conn.execute(
+                    "UPDATE schema_version SET version = ?",
                     (SCHEMA_VERSION,),
                 )
 
@@ -401,6 +448,232 @@ class CortexStore:
                 "SELECT * FROM violations ORDER BY at DESC"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- Day 16: pair classifications ----
+
+    def upsert_pair_classification(
+        self,
+        *,
+        session_id: str,
+        at: str,
+        tripwire_ids: list[str],
+        label: str,
+        confidence: float,
+        reasoning: str | None,
+        model: str,
+        classified_at: str,
+        cost_usd: float = 0.0,
+    ) -> bool:
+        """Insert a pair classification row. Idempotent via
+        `(session_id, at)` primary key. Returns True if a new row was
+        inserted, False if the pair was already classified (INSERT OR
+        IGNORE semantics — pre-existing rows are preserved so reruns
+        of `cortex promote classify` cost zero).
+        """
+        if label not in _VALID_PAIR_LABELS:
+            raise ValueError(
+                f"label must be one of {_VALID_PAIR_LABELS}, got {label!r}"
+            )
+        confidence = max(0.0, min(1.0, float(confidence)))
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO pair_classifications
+                    (session_id, at, tripwire_ids, label, confidence,
+                     reasoning, model, classified_at, cost_usd)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    at,
+                    json.dumps(tripwire_ids),
+                    label,
+                    confidence,
+                    (reasoning or "")[:300],
+                    model,
+                    classified_at,
+                    float(cost_usd),
+                ),
+            )
+        return cur.rowcount > 0
+
+    def get_pair_classification(
+        self, session_id: str, at: str
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM pair_classifications WHERE session_id = ? AND at = ?",
+            (session_id, at),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["tripwire_ids"] = (
+            json.loads(d["tripwire_ids"]) if d.get("tripwire_ids") else []
+        )
+        return d
+
+    def list_pair_classifications(
+        self, since_iso: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return all classification rows, optionally filtered by
+        `classified_at >= since_iso`. Used by fitness aggregation to
+        build the `(session_id, at) -> label` index.
+        """
+        if since_iso:
+            rows = self.conn.execute(
+                "SELECT * FROM pair_classifications WHERE classified_at >= ?"
+                " ORDER BY classified_at ASC",
+                (since_iso,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM pair_classifications ORDER BY classified_at ASC"
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d["tripwire_ids"] = (
+                json.loads(d["tripwire_ids"]) if d.get("tripwire_ids") else []
+            )
+            out.append(d)
+        return out
+
+    # ---- Day 16: status change audit ----
+
+    def record_status_change(
+        self,
+        *,
+        tripwire_id: str,
+        from_status: str,
+        to_status: str,
+        reason: str,
+        metadata: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        at: str | None = None,
+    ) -> int:
+        """Append an audit row to `status_changes`. Does NOT mutate the
+        tripwires table — callers that want the full "record + mutate"
+        path should use `apply_status_transition` instead.
+        """
+        ts = at or _now_iso()
+        meta_json = json.dumps(metadata) if metadata else None
+        with self.conn:
+            cur = self.conn.execute(
+                """
+                INSERT INTO status_changes
+                    (tripwire_id, from_status, to_status, reason,
+                     metadata_json, at, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tripwire_id,
+                    from_status,
+                    to_status,
+                    reason,
+                    meta_json,
+                    ts,
+                    session_id,
+                ),
+            )
+        return int(cur.lastrowid or 0)
+
+    def list_status_changes(
+        self,
+        *,
+        tripwire_id: str | None = None,
+        since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return audit rows, newest first. Filter by tripwire_id and/or
+        classified_at >= since_iso.
+        """
+        sql = "SELECT * FROM status_changes"
+        where: list[str] = []
+        params: list[Any] = []
+        if tripwire_id:
+            where.append("tripwire_id = ?")
+            params.append(tripwire_id)
+        if since_iso:
+            where.append("at >= ?")
+            params.append(since_iso)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY at DESC, id DESC"
+        rows = self.conn.execute(sql, params).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            raw_meta = d.get("metadata_json")
+            d["metadata"] = json.loads(raw_meta) if raw_meta else {}
+            out.append(d)
+        return out
+
+    def apply_status_transition(
+        self,
+        *,
+        tripwire_id: str,
+        to_status: str,
+        reason: str,
+        metadata: dict[str, Any] | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomic status mutation + audit row in ONE transaction.
+
+        Day 16: the only mutation path used by the DMN promoter. Reads
+        the current status first, validates the target, writes the
+        `status_changes` row and updates `tripwires.status` under a
+        single `BEGIN ... COMMIT` so an interrupted run never leaves
+        the audit log out of sync with the live status field.
+
+        Returns a dict describing the applied change, or None if the
+        tripwire does not exist OR already has the target status
+        (no-op, no row written).
+        """
+        if to_status not in _VALID_STATUSES:
+            raise ValueError(
+                f"to_status must be one of {_VALID_STATUSES}, got {to_status!r}"
+            )
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT status FROM tripwires WHERE id = ?", (tripwire_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            from_status = row["status"]
+            if from_status == to_status:
+                return None
+            at = _now_iso()
+            meta_json = json.dumps(metadata) if metadata else None
+            self.conn.execute(
+                "UPDATE tripwires SET status = ? WHERE id = ?",
+                (to_status, tripwire_id),
+            )
+            cur = self.conn.execute(
+                """
+                INSERT INTO status_changes
+                    (tripwire_id, from_status, to_status, reason,
+                     metadata_json, at, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tripwire_id,
+                    from_status,
+                    to_status,
+                    reason,
+                    meta_json,
+                    at,
+                    session_id,
+                ),
+            )
+            return {
+                "id": int(cur.lastrowid or 0),
+                "tripwire_id": tripwire_id,
+                "from_status": from_status,
+                "to_status": to_status,
+                "reason": reason,
+                "metadata": metadata or {},
+                "at": at,
+                "session_id": session_id,
+            }
 
     # ---- stats ----
 
