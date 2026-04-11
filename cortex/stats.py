@@ -299,6 +299,7 @@ def render_stats(
     *,
     anonymize: bool = False,
     ratio: dict[str, Any] | None = None,
+    fitness: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     """Render stats dict as a human-readable text report."""
     lines: list[str] = []
@@ -435,6 +436,14 @@ def render_stats(
                 "narrow; most briefs come from TF-IDF body scoring)"
             )
         lines.append("")
+
+    # Phase 0 (Autonomous Epistemic Loop): composite fitness per tripwire.
+    # Derived from implicit signals (caught/ignored/surprise/frustration)
+    # already in the audit log, no human labels required.
+    if fitness:
+        from cortex.fitness import render_fitness_block
+
+        lines.extend(render_fitness_block(fitness))
 
     return "\n".join(lines)
 

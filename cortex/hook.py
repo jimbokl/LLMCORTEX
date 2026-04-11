@@ -40,10 +40,18 @@ def main() -> int:
             return 0
 
         from cortex.classify import classify_prompt, render_brief
+        from cortex.fitness import score_prompt_frustration
         from cortex.verify_runner import run_verifiers_for
 
         result = classify_prompt(prompt)
         session_id = payload.get("session_id", "") or ""
+
+        # Phase 0 (Autonomous Epistemic Loop): score the prompt for
+        # corrective / frustrated language so the next fitness pass can
+        # attribute a soft-negative signal back to whatever tripwires
+        # the PREVIOUS inject in this session produced. We store only a
+        # [0.0, 1.0] scalar, never the prompt text.
+        frustration = score_prompt_frustration(prompt)
 
         # Day 15: shadow matches are collected for audit only, never
         # rendered into the brief. Log them BEFORE the rest of the flow
@@ -125,6 +133,7 @@ def main() -> int:
                             "scores": [
                                 h.get("_fallback_score", 0.0) for h in fallback_hits
                             ],
+                            "prompt_frustration": round(frustration, 3),
                         },
                     )
                 except Exception:
@@ -159,6 +168,7 @@ def main() -> int:
                         for v in result.get("verifier_results") or []
                     ],
                     "blocked": should_block,
+                    "prompt_frustration": round(frustration, 3),
                 },
             )
             if should_block:

@@ -116,6 +116,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 
 def _cmd_stats_sessions(args: argparse.Namespace) -> int:
+    from cortex.fitness import compute_fitness
     from cortex.stats import (
         collect_sessions,
         compute_primary_vs_fallback_ratio,
@@ -127,13 +128,18 @@ def _cmd_stats_sessions(args: argparse.Namespace) -> int:
     sessions = collect_sessions(days=args.days)
     stats = compute_stats(sessions)
     with _open(args) as store:
-        all_ids = [tw["id"] for tw in store.list_tripwires()]
+        all_tripwires = store.list_tripwires()
+    all_ids = [tw["id"] for tw in all_tripwires]
+    bodies = {tw["id"]: tw.get("body") or "" for tw in all_tripwires}
+    costs = {tw["id"]: float(tw.get("cost_usd") or 0.0) for tw in all_tripwires}
     cold = find_cold_tripwires(stats, all_ids)
     ratio = compute_primary_vs_fallback_ratio(sessions)
+    fitness = compute_fitness(sessions, tripwire_bodies=bodies, tripwire_costs=costs)
     print(render_stats(
         stats, cold, days=args.days,
         anonymize=getattr(args, "anonymize", False),
         ratio=ratio,
+        fitness=fitness,
     ))
     return 0
 
