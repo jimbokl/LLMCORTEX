@@ -177,6 +177,47 @@ def cmd_import_palace(args: argparse.Namespace) -> int:
     print(f"(wing={args.wing}, min_sim={args.min_sim})")
     print()
 
+    if args.to_inbox:
+        from cortex.inbox import write_draft
+
+        staged: list[str] = []
+        for hit in eligible:
+            src = hit.get("source_file", "")
+            text = (hit.get("text") or "")[:1500]
+            draft = {
+                "id": "TODO_snake_case_id",
+                "title": "TODO one-line summary",
+                "severity": "medium",
+                "domain": args.wing,
+                "triggers": ["TODO", "extract", "from", "body"],
+                "body": (
+                    "TODO one-sentence rule statement.\n"
+                    "\n"
+                    f"Why: distilled from Palace {hit.get('room', '')}/{src}.\n"
+                    "\n"
+                    "How to apply: (1) TODO. (2) TODO. (3) edge case.\n"
+                    "\n"
+                    f"--- Palace excerpt (similarity {hit.get('similarity', 0.0):.3f}) ---\n"
+                    f"{text}"
+                ),
+                "verify_cmd": None,
+                "cost_usd": 0.0,
+                "source_file": src,
+            }
+            draft_id = write_draft(draft, source=f"palace_{args.wing}")
+            if draft_id:
+                staged.append(draft_id)
+                print(f"  staged: {draft_id}  ({hit.get('room', '')}/{src})")
+        print()
+        print(
+            f"Staged {len(staged)} draft(s) into the inbox. "
+            "Edit fields, then approve:"
+        )
+        print("  cortex inbox list")
+        print("  cortex inbox show <draft_id>")
+        print("  cortex inbox approve <draft_id>")
+        return 0
+
     for i, hit in enumerate(eligible, 1):
         sim = hit.get("similarity", 0.0)
         room = hit.get("room", "")
@@ -209,7 +250,131 @@ def cmd_import_palace(args: argparse.Namespace) -> int:
         print("    },")
         print()
 
+    print("Tip: re-run with --to-inbox to stage these drafts as editable")
+    print("     JSON files under .cortex/inbox/ instead of printing templates.")
+
     return 0
+
+
+# ---- inbox commands (Day 8) ----
+
+
+def cmd_inbox_list(args: argparse.Namespace) -> int:
+    from cortex.inbox import list_drafts
+
+    drafts = list_drafts()
+    if not drafts:
+        print("(inbox is empty)")
+        return 0
+    print(f"{'DRAFT_ID':<40} {'SOURCE':<20} {'ID_FIELD':<28} STATUS")
+    print("-" * 100)
+    from cortex.inbox import validate_draft
+
+    for d in drafts:
+        draft = d.get("draft") or {}
+        missing, todos = validate_draft(draft)
+        if missing:
+            status = f"MISSING: {','.join(missing[:3])}"
+        elif todos:
+            status = f"TODO: {','.join(todos[:3])}"
+        else:
+            status = "READY"
+        print(
+            f"{d.get('draft_id', ''):<40} "
+            f"{d.get('source', ''):<20} "
+            f"{str(draft.get('id', '')):<28} "
+            f"{status}"
+        )
+    return 0
+
+
+def cmd_inbox_show(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from cortex.inbox import read_draft, validate_draft
+
+    d = read_draft(args.draft_id)
+    if not d:
+        print(f"Draft not found: {args.draft_id}", file=sys.stderr)
+        return 1
+    print(f"Draft ID:   {d.get('draft_id', '')}")
+    print(f"Source:     {d.get('source', '')}")
+    print(f"Created at: {d.get('created_at', '')}")
+    draft = d.get("draft") or {}
+    missing, todos = validate_draft(draft)
+    if missing:
+        print(f"Missing:    {', '.join(missing)}")
+    if todos:
+        print(f"TODO in:    {', '.join(todos)}")
+    if not missing and not todos:
+        print("Status:     READY to approve")
+    print()
+    print("Draft contents:")
+    print(_json.dumps(draft, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_inbox_approve(args: argparse.Namespace) -> int:
+    from cortex.inbox import (
+        delete_draft,
+        draft_to_tripwire_kwargs,
+        read_draft,
+        validate_draft,
+    )
+
+    d = read_draft(args.draft_id)
+    if not d:
+        print(f"Draft not found: {args.draft_id}", file=sys.stderr)
+        return 1
+    draft = d.get("draft") or {}
+
+    missing, todos = validate_draft(draft)
+    if missing:
+        print(
+            f"Cannot approve {args.draft_id}: missing required fields: {', '.join(missing)}",
+            file=sys.stderr,
+        )
+        print(
+            f"Edit {args.draft_id}.json in the inbox directory and retry.",
+            file=sys.stderr,
+        )
+        return 2
+    if todos and not args.force:
+        print(
+            f"Cannot approve {args.draft_id}: TODO placeholders in: {', '.join(todos)}",
+            file=sys.stderr,
+        )
+        print(
+            "Edit the draft to fill them, or re-run with --force to approve as-is.",
+            file=sys.stderr,
+        )
+        return 2
+
+    kwargs = draft_to_tripwire_kwargs(draft)
+    try:
+        with _open(args) as store:
+            store.add_tripwire(**kwargs)
+    except Exception as e:
+        print(f"Failed to add tripwire to store: {e}", file=sys.stderr)
+        return 3
+
+    delete_draft(args.draft_id)
+    print(f"Approved: {kwargs['id']} (draft {args.draft_id} removed)")
+    return 0
+
+
+def cmd_inbox_reject(args: argparse.Namespace) -> int:
+    from cortex.inbox import delete_draft, read_draft
+
+    d = read_draft(args.draft_id)
+    if not d:
+        print(f"Draft not found: {args.draft_id}", file=sys.stderr)
+        return 1
+    if delete_draft(args.draft_id):
+        print(f"Rejected: {args.draft_id} (removed from inbox)")
+        return 0
+    print(f"Failed to delete {args.draft_id}", file=sys.stderr)
+    return 3
 
 
 def cmd_find(args: argparse.Namespace) -> int:
@@ -310,7 +475,47 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("CORTEX_PALACE_WING", "polymarket"),
         help="Palace wing to search (env: CORTEX_PALACE_WING, default: polymarket)",
     )
+    ip.add_argument(
+        "--to-inbox",
+        action="store_true",
+        dest="to_inbox",
+        help=(
+            "Stage hits as draft JSON files under .cortex/inbox/ instead "
+            "of printing templates to stdout. Use `cortex inbox` commands "
+            "to review and approve."
+        ),
+    )
     ip.set_defaults(func=cmd_import_palace)
+
+    # ---- Day 8: inbox workflow ----
+    inbox_p = sub.add_parser(
+        "inbox",
+        help="Manage the draft tripwire inbox (list / show / approve / reject)",
+    )
+    inbox_sub = inbox_p.add_subparsers(dest="inbox_cmd", required=True)
+
+    il = inbox_sub.add_parser("list", help="List pending drafts")
+    il.set_defaults(func=cmd_inbox_list)
+
+    ish = inbox_sub.add_parser("show", help="Show one draft with validation status")
+    ish.add_argument("draft_id", help="Draft id (see `cortex inbox list`)")
+    ish.set_defaults(func=cmd_inbox_show)
+
+    iap = inbox_sub.add_parser(
+        "approve",
+        help="Promote a draft into the tripwire store",
+    )
+    iap.add_argument("draft_id", help="Draft id to approve")
+    iap.add_argument(
+        "--force",
+        action="store_true",
+        help="Approve even when TODO placeholders remain in the draft",
+    )
+    iap.set_defaults(func=cmd_inbox_approve)
+
+    irj = inbox_sub.add_parser("reject", help="Delete a draft without promoting it")
+    irj.add_argument("draft_id", help="Draft id to reject")
+    irj.set_defaults(func=cmd_inbox_reject)
 
     fd = sub.add_parser("find", help="Find tripwires by trigger keywords")
     fd.add_argument("words", help="Comma-separated list of words")

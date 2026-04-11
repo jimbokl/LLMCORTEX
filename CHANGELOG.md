@@ -166,6 +166,44 @@ Modules covered: `store`, `importers/memory_md`, `classify`, `hook`,
 `synthesize`, `verifiers/check_feature_lookahead`, `session`, `watch`,
 `tfidf_fallback`, `stats`, `violation_detect`, `verify_runner`.
 
+### Day 8 — inbox workflow
+
+**The human-approval step between "I found something" and "it's in the store".**
+
+- **`cortex/inbox.py`**: draft tripwire store as JSON files under
+  `.cortex/inbox/*.json`. Walk-up resolution like session logs; honors
+  `CORTEX_INBOX_DIR` env var. All I/O is fail-safe (exceptions swallowed).
+- **CLI**: four new subcommands under `cortex inbox`:
+  - `list` — show all pending drafts with validation status
+    (READY / TODO: fields / MISSING: fields)
+  - `show <draft_id>` — display one draft with full JSON contents
+  - `approve <draft_id> [--force]` — validate required fields, check for
+    TODO placeholders, promote to the tripwire store via
+    `store.add_tripwire()`, delete the draft on success. `--force`
+    bypasses the TODO check for advanced users.
+  - `reject <draft_id>` — delete the draft without promoting
+- **`cortex import-palace --to-inbox`**: the existing Palace smart-search
+  now has an opt-in flag to stage hits as draft JSON files in the inbox
+  instead of printing copy-paste templates to stdout. Drafts have uuid-6
+  suffixes on auto-generated ids to avoid collisions when multiple hits
+  land in the same second.
+- **`validate_draft()`**: reusable helper that returns
+  `(missing_fields, todo_fields)` tuples. Ships as a library primitive
+  for Day-9 DMN reflection loops and for external callers.
+- **`draft_to_tripwire_kwargs()`**: filters a draft dict down to the
+  fields accepted by `store.add_tripwire()`, silently dropping unknown
+  keys so drafts can carry extra metadata (Palace similarity scores,
+  provenance markers) without breaking promotion.
+- +19 tests (165 total)
+
+**Why this matters:** Cortex can now close the Palace-to-Cortex knowledge
+transfer loop with a human in the loop. Without inbox, surfacing a Palace
+drawer meant opening `cortex/importers/memory_md.py` in an editor,
+pasting a Python dict, running `cortex migrate`. With inbox, it's a
+three-step CLI flow that validates schema, flags unedited TODO
+placeholders, and preserves provenance. The same workflow will absorb
+Day-9 DMN proposals from the Haiku reflection loop.
+
 ### Day 7 post-prep — public release housekeeping
 
 - Removed hardcoded BOTWA Palace path from `cli.py`; `cortex import-palace`

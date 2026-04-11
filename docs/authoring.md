@@ -69,6 +69,31 @@ cortex add \
   --cost-usd 42.00
 ```
 
+### Via inbox (recommended for tripwires drafted from Palace search or
+other discovery flows — Day 8)
+
+`cortex import-palace --to-inbox "your query"` stages draft JSON files
+under `.cortex/inbox/*.json`. Each draft has validation status visible
+in `cortex inbox list`:
+
+```
+$ cortex inbox list
+DRAFT_ID                             SOURCE              ID_FIELD              STATUS
+palace_polymarket_20260411_a3f2c1    palace_polymarket   TODO_snake_case_id    TODO: id,title,triggers
+```
+
+Edit the draft file in your editor to fill in real `id`, `title`,
+`triggers`, and `body`. Then:
+
+```bash
+cortex inbox show palace_polymarket_20260411_a3f2c1    # verify status READY
+cortex inbox approve palace_polymarket_20260411_a3f2c1  # promotes to store
+```
+
+Use `cortex inbox reject <draft_id>` to discard a draft you decided
+isn't worth a tripwire. The `--force` flag on approve bypasses the
+TODO placeholder check if you really want to ship a draft as-is.
+
 ### Via importer (recommended for anything you want to version in git)
 
 Edit [`cortex/importers/memory_md.py`](../cortex/importers/memory_md.py),

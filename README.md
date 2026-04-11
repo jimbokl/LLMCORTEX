@@ -379,7 +379,11 @@ It's running live in one production project (the Polymarket research repo where 
 | `cortex stats` | Store summary by severity and domain |
 | `cortex stats --sessions [--days N]` | Session audit: rule hits, cold tripwires, silent violations, effectiveness |
 | `cortex add ...` | Add a tripwire manually |
-| `cortex import-palace "query"` | Smart search over Palace and emit tripwire draft templates |
+| `cortex import-palace "query" [--to-inbox]` | Smart search over Palace, emit draft templates or stage to inbox |
+| `cortex inbox list` | List pending tripwire drafts with validation status |
+| `cortex inbox show <draft_id>` | Show one draft with full JSON and TODO/MISSING markers |
+| `cortex inbox approve <draft_id> [--force]` | Promote a draft to the tripwire store |
+| `cortex inbox reject <draft_id>` | Delete a draft without promoting |
 | `cortex-hook` | `UserPromptSubmit` hook entry point |
 | `cortex-watch` | `PostToolUse` audit hook entry point |
 | `cortex-check-lookahead --features-dir DIR` | Standalone lookahead-bug verifier |

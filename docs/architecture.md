@@ -324,6 +324,51 @@ injection *effectiveness*. Day 7+ can tune rules and bodies based on
 which tripwires have high violation rates (ignored by the agent) vs low
 (applied).
 
+## Day 8 (shipped) — inbox workflow
+
+The `cortex import-palace` command (Day 5) surfaces Palace drawers as
+tripwire draft templates. Until Day 8 those templates were printed to
+stdout and the user had to copy-paste them into
+`cortex/importers/memory_md.py` and re-run `cortex migrate`. The
+inbox workflow formalizes the approval step:
+
+```
+    palace query
+         |
+         v
+    cortex import-palace --to-inbox
+         |
+         v                            fail-safe at every I/O
+    .cortex/inbox/*.json  <----+
+         |                     |
+         v                     |
+    editor (fill TODO fields)  |
+         |                     |
+         v                     |
+    cortex inbox list          |
+    cortex inbox show <id>     |
+    cortex inbox approve <id>  +---->  store.add_tripwire(...)
+    cortex inbox reject <id>
+```
+
+Each draft is a JSON file with:
+
+- `draft_id`: unique identifier (auto-generated as
+  `<source>_<timestamp>_<uuid6>` to avoid collisions)
+- `source`: provenance tag (`manual`, `palace_polymarket`, `dmn_haiku`)
+- `created_at`: ISO timestamp
+- `draft`: the tripwire fields themselves
+
+`validate_draft()` returns `(missing_fields, todo_fields)` for a given
+draft. A draft is READY to approve when both lists are empty; the
+`approve` command refuses to promote a draft with `TODO` placeholders
+unless `--force` is passed.
+
+The inbox is the foundation for the Day-9 Haiku reflection loop:
+instead of the loop writing directly to the store, it writes to the
+inbox and the human stays in the approval loop. Automatic promotion of
+LLM-proposed tripwires would dilute the curated signal.
+
 ## Day 7 (shipped) — pre-flight verifier auto-run
 
 The `verify_cmd` field on a tripwire has existed since Day 1, but until
