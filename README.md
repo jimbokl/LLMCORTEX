@@ -107,13 +107,32 @@ is what turns "here are some lessons" into "here is the blocking number."
 ## Install
 
 ```bash
+pip install llmcortex-agent
+```
+
+Or for development / contributing:
+
+```bash
 git clone https://github.com/jimbokl/LLMCORTEX.git
 cd LLMCORTEX
 pip install -e ".[dev]"
 ```
 
-**One runtime dependency** (`pyyaml`). Everything else is stdlib. 107 tests.
-~1800 lines of Python. Zero telemetry, zero network calls outside your
+**Note on naming**: the PyPI distribution is `llmcortex-agent` because
+`cortex-agent` was already taken by an unrelated web-cartography project.
+The Python import name stays `cortex`, so you do
+`pip install llmcortex-agent` but `from cortex.store import CortexStore`
+in your code.
+
+Optional extras:
+
+```bash
+pip install "llmcortex-agent[dev]"     # pytest + ruff
+pip install "llmcortex-agent[dmn]"     # anthropic SDK for `cortex reflect`
+```
+
+**One runtime dependency** (`pyyaml`). Everything else is stdlib. 219 tests.
+~3100 lines of Python. Zero telemetry, zero network calls outside your
 machine.
 
 ---

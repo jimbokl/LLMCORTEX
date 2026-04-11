@@ -3,7 +3,14 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cortex-agent"
+# NOTE: the PyPI distribution name is `llmcortex-agent` (matching the
+# GitHub repo slug + the "agent" suffix of the import package). The
+# import name is still `cortex` — so users do
+# `pip install llmcortex-agent` but `from cortex.cli import main`. This
+# is standard practice for packages whose obvious name was taken on
+# PyPI (in our case `cortex-agent` is claimed by an unrelated project
+# about web cartography).
+name = "llmcortex-agent"
 version = "0.1.0"
 description = "Active memory and executive control for AI coding agents. Classifies user prompts against a curated tripwire store, injects the matched lessons into the agent's working context via a Claude Code UserPromptSubmit hook, before the agent reasons about the task."
 readme = "README.md"

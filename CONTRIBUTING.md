@@ -103,7 +103,10 @@ Short and imperative:
 
 ## Publishing to PyPI (maintainers only)
 
-Cortex ships as `cortex-agent` on PyPI. The release process:
+Cortex ships as `llmcortex-agent` on PyPI (the name `cortex-agent` is taken
+by an unrelated project). The import name stays `cortex`:
+`pip install llmcortex-agent` then `from cortex.cli import main`. The
+release process:
 
 ```bash
 # 1. Bump version in pyproject.toml
@@ -133,7 +136,7 @@ python -m twine upload --repository testpypi dist/*
 python -m venv /tmp/test-cortex && /tmp/test-cortex/bin/pip install \
     --index-url https://test.pypi.org/simple/ \
     --extra-index-url https://pypi.org/simple/ \
-    cortex-agent
+    llmcortex-agent
 
 # 6. Upload to real PyPI
 python -m twine upload dist/*
@@ -147,7 +150,7 @@ git push origin vX.Y.Z
 
 PyPI credentials live in `~/.pypirc` or `TWINE_USERNAME` / `TWINE_PASSWORD`
 env vars. Use an API token (starts with `pypi-`), never your account
-password. Scope the token to the `cortex-agent` project only.
+password. Scope the token to the `llmcortex-agent` project only.
 
 ## Questions
 
