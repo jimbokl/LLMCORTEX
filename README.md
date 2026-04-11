@@ -421,12 +421,21 @@ backtest-vs-prod comparison, feature pipelines).
   `[OK]` / `[FAIL]` / `[SKIP]` status. Static warnings become "the bug is
   present in your current code RIGHT NOW."
 
-**Day 8+** (not yet shipped):
+**Day 8 — shipped**:
+
+- **Inbox workflow** — `cortex inbox list / show / approve / reject`
+  manages draft tripwires as JSON files under `.cortex/inbox/`.
+  `cortex import-palace --to-inbox` stages Palace hits as editable
+  drafts instead of printing copy-paste templates. `validate_draft()`
+  reports `TODO`/`MISSING` field status; `approve` refuses to promote
+  drafts with TODO placeholders unless `--force` is passed. Closes
+  the Palace → Cortex knowledge transfer loop with a human in the loop,
+  and provides the substrate for Day 9 DMN proposals.
+
+**Day 9+** (not yet shipped):
 
 - **Weekly DMN reflection loop** — cheap LLM (Haiku) processes session
-  logs and proposes new tripwires to an inbox for human approval
-- **Inbox workflow** — `cortex inbox list / approve / reject` for
-  DMN-proposed drafts
+  logs and proposes new tripwires straight into the inbox
 - **Pattern authoring helper** — `cortex suggest-patterns <tripwire_id>`
   reads session logs and proposes regex candidates from observed
   violations the user retroactively marks
