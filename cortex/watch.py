@@ -56,12 +56,26 @@ def main() -> int:
         #
         # De-duplicated against the most recent prediction in the
         # session log to avoid multi-tool_use messages writing N copies.
+        #
+        # Tier 1.5 Wire B: a `predict_scan` diagnostic event is emitted
+        # on every attempt so the gap "why is the prediction log empty
+        # after 81 injects?" is answerable from data. Three booleans +
+        # one int, ~80 bytes per event.
         try:
             from cortex.surprise import parse_prediction, read_last_prediction_text
 
             transcript_path = payload.get("transcript_path")
             assistant_text = read_last_prediction_text(transcript_path)
             prediction = parse_prediction(assistant_text)
+            log_event(
+                session_id,
+                "predict_scan",
+                {
+                    "transcript_path_present": bool(transcript_path),
+                    "assistant_text_len": len(assistant_text or ""),
+                    "prediction_found": prediction is not None,
+                },
+            )
             if prediction is not None and not _already_logged(
                 session_id, read_session, prediction
             ):
@@ -88,10 +102,41 @@ def main() -> int:
 
         # Silent violation detection: match the snippet against active
         # tripwires in this session. One event per matched tripwire.
+        #
+        # Tier 1.5 Wire A: previously only the jsonl got the event so
+        # `tripwires.violation_count` stayed 0 forever even with real
+        # hits in the log. Now each match also persists to the
+        # `violations` table and bumps the per-tripwire counter, so
+        # `cortex stats` and the Day-5+ effectiveness report finally
+        # see real numbers. Store open/record/close are each fail-safe
+        # so a locked or missing store never disrupts the audit path.
         try:
             violations = detect_violations(session_id, tool_name, snippet)
+            store = None
+            if violations:
+                from cortex.classify import find_db
+                from cortex.store import CortexStore
+
+                try:
+                    store = CortexStore(find_db())
+                except Exception:
+                    store = None
             for v in violations:
                 log_event(session_id, "potential_violation", v)
+                if store is not None:
+                    try:
+                        store.record_violation(
+                            tripwire_id=v.get("tripwire_id", ""),
+                            session_id=session_id,
+                            evidence=(v.get("snippet") or "")[:200],
+                        )
+                    except Exception:
+                        pass
+            if store is not None:
+                try:
+                    store.close()
+                except Exception:
+                    pass
         except Exception:
             pass
 
