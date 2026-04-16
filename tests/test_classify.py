@@ -170,6 +170,203 @@ def test_render_brief_empty_on_no_tripwires():
     assert render_brief({"tripwires": [], "matched_rules": [], "truncated": False}) == ""
 
 
+def _make_result(tripwires):
+    return {
+        "matched_rules": ["r"],
+        "tripwires": list(tripwires),
+        "shadow_tripwires": [],
+        "synthesis": [],
+        "truncated": False,
+        "total_matches": len(tripwires),
+    }
+
+
+def test_render_brief_default_budget_keeps_every_tripwire(monkeypatch):
+    """The 6000-char default is above every brief observed in 13 days of
+    production audit, so the clamp must be a no-op for realistic inputs.
+    """
+    monkeypatch.delenv("CORTEX_BRIEF_MAX_CHARS", raising=False)
+    trips = [
+        {"id": f"t{i}", "severity": "low", "cost_usd": 0.0,
+         "title": f"Low {i}", "body": "Body " * 20}
+        for i in range(4)
+    ]
+    brief = render_brief(_make_result(trips))
+    # All four present, no truncation marker.
+    assert all(f"[{i + 1}] t{i}" in brief for i in range(4))
+    assert "cortex_brief: truncated" not in brief
+
+
+def test_render_brief_truncates_low_severity_on_budget(monkeypatch):
+    """Tight budget must drop low-severity entries before any critical
+    one is touched. The surviving brief must carry the truncation marker
+    listing the dropped ids so the agent sees what was pruned.
+    """
+    monkeypatch.setenv("CORTEX_BRIEF_MAX_CHARS", "800")
+    trips = [
+        {"id": "crit1", "severity": "critical", "cost_usd": 100.0,
+         "title": "Critical lesson", "body": "Critical body\nLine 2"},
+        {"id": "hi1", "severity": "high", "cost_usd": 50.0,
+         "title": "High lesson", "body": "High body " * 20},
+        {"id": "med1", "severity": "medium", "cost_usd": 0.0,
+         "title": "Medium", "body": "Medium body " * 30},
+        {"id": "low1", "severity": "low", "cost_usd": 0.0,
+         "title": "Low lesson", "body": "Low body " * 30},
+    ]
+    brief = render_brief(_make_result(trips))
+    # Critical is always preserved.
+    assert "crit1" in brief
+    # Marker names the dropped ids.
+    assert "cortex_brief: truncated" in brief
+    assert "low1" in brief  # listed in the marker even if dropped from body
+    # The body section for low1 should be gone. We assert via the
+    # "[N] low1" preamble pattern which appears only when the tripwire
+    # is actually rendered in the list.
+    assert "] low1" not in brief
+
+
+def test_render_brief_never_truncates_critical_even_under_tiny_budget(monkeypatch):
+    """Pathological budget: even at 50 chars the brief must keep every
+    critical tripwire. The clamp stops as soon as only critical entries
+    remain, trading over-budget for information preservation.
+    """
+    monkeypatch.setenv("CORTEX_BRIEF_MAX_CHARS", "50")
+    trips = [
+        {"id": "crit1", "severity": "critical", "cost_usd": 0.0,
+         "title": "Crit one", "body": "Body one"},
+        {"id": "crit2", "severity": "critical", "cost_usd": 0.0,
+         "title": "Crit two", "body": "Body two"},
+        {"id": "low1", "severity": "low", "cost_usd": 0.0,
+         "title": "Low lesson", "body": "Low body " * 30},
+    ]
+    brief = render_brief(_make_result(trips))
+    assert "crit1" in brief
+    assert "crit2" in brief
+    # Low is dropped, marker notes it.
+    assert "] low1" not in brief
+    assert "cortex_brief: truncated" in brief
+
+
+def test_affected_files_match_injects_tripwire_even_with_irrelevant_prompt():
+    """Tier 1.4: a prompt that shares zero keywords with any rule still
+    surfaces the tripwire attached to one of the touched paths via its
+    `affected_files` glob list.
+    """
+    from cortex.store import CortexStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        db = str(tmp_p / "seed.db")
+        store = CortexStore(db)
+        store.add_tripwire(
+            id="fx_path", title="path-matched rule", severity="high",
+            domain="generic", triggers=["bar"], body="body",
+            affected_files=["cortex/classify.py", "*classify*"],
+        )
+        store.close()
+        rules_dir = tmp_p / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "empty.yml").write_text(
+            yaml.safe_dump({"rules": []}), encoding="utf-8"
+        )
+        # The prompt has no keyword match — only the file path fires.
+        result = classify_prompt(
+            "cleanup random unrelated text",
+            db_path=db,
+            rules_dir=rules_dir,
+            touched_files=["cortex/classify.py"],
+        )
+        ids = {t["id"] for t in result["tripwires"]}
+        assert "fx_path" in ids
+        assert "fx_path" in result["touched_files_matched"]
+
+
+def test_affected_files_deduplicate_against_keyword_match():
+    """A tripwire that already matched via keywords must not be counted
+    twice when the touched_files second pass would also match it.
+    """
+    from cortex.store import CortexStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        db = str(tmp_p / "seed.db")
+        store = CortexStore(db)
+        store.add_tripwire(
+            id="fx_both", title="both", severity="high", domain="generic",
+            triggers=["foo"], body="body",
+            affected_files=["cortex/classify.py"],
+        )
+        store.close()
+        rules_dir = tmp_p / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "rules.yml").write_text(
+            yaml.safe_dump(
+                {
+                    "rules": [{
+                        "id": "r",
+                        "match_any": ["foo"],
+                        "and_any": ["bar"],
+                        "inject": ["fx_both"],
+                    }]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = classify_prompt(
+            "foo bar hello", db_path=db, rules_dir=rules_dir,
+            touched_files=["cortex/classify.py"],
+        )
+        ids = [t["id"] for t in result["tripwires"]]
+        assert ids.count("fx_both") == 1
+        # Not reported in touched_files_matched because it was already
+        # matched by keywords first.
+        assert "fx_both" not in result["touched_files_matched"]
+
+
+def test_affected_files_empty_list_is_noop():
+    """Backwards-compatibility guard: a tripwire without
+    `affected_files` or a classify call without `touched_files` must
+    behave exactly as pre-Tier-1.4.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_p = Path(tmp)
+        db = str(tmp_p / "seed.db")
+        run_migration(db)
+        rules_dir = tmp_p / "rules"
+        _write_test_rules(rules_dir)
+        # No touched_files passed at all.
+        r1 = classify_prompt(
+            "backtest poly slot", db_path=db, rules_dir=rules_dir
+        )
+        # Empty list is equivalent.
+        r2 = classify_prompt(
+            "backtest poly slot", db_path=db, rules_dir=rules_dir,
+            touched_files=[],
+        )
+        assert {t["id"] for t in r1["tripwires"]} == {t["id"] for t in r2["tripwires"]}
+        assert r1["touched_files_matched"] == []
+        assert r2["touched_files_matched"] == []
+
+
+def test_render_brief_budget_env_non_integer_falls_back_to_default(monkeypatch):
+    """A misconfigured env var must never silence the brief. Garbage
+    input resolves back to DEFAULT_BRIEF_MAX_CHARS, which at 6000 is
+    generous enough that nothing is dropped for the canonical four-item
+    result used elsewhere in this test file.
+    """
+    monkeypatch.setenv("CORTEX_BRIEF_MAX_CHARS", "not-a-number")
+    trips = [
+        {"id": "crit1", "severity": "critical", "cost_usd": 0.0,
+         "title": "Crit", "body": "Body"},
+        {"id": "low1", "severity": "low", "cost_usd": 0.0,
+         "title": "Low", "body": "Body"},
+    ]
+    brief = render_brief(_make_result(trips))
+    assert "crit1" in brief
+    assert "] low1" in brief
+    assert "cortex_brief: truncated" not in brief
+
+
 def test_real_rules_fire_on_replay_basis_arb():
     """Smoke test using the shipped rules: a real-world prompt that caused
     the whole project should match `poly_backtest_task` and inject the

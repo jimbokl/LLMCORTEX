@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS tripwires (
     source_file         TEXT,
     violation_patterns  TEXT,                  -- JSON array of regex strings (Day 6)
     status              TEXT NOT NULL DEFAULT 'active'
-                        CHECK (status IN ('active','shadow','archived'))  -- Day 15
+                        CHECK (status IN ('active','shadow','archived')),  -- Day 15
+    affected_files      TEXT                   -- JSON array of fnmatch globs (Day 14/Tier 1.4)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tripwires_domain ON tripwires(domain);
@@ -121,6 +122,8 @@ def _row_to_tripwire(row: sqlite3.Row) -> dict[str, Any]:
     d["triggers"] = json.loads(d["triggers"]) if d["triggers"] else []
     raw_patterns = d.get("violation_patterns")
     d["violation_patterns"] = json.loads(raw_patterns) if raw_patterns else []
+    raw_files = d.get("affected_files")
+    d["affected_files"] = json.loads(raw_files) if raw_files else []
     return d
 
 
@@ -178,6 +181,14 @@ class CortexStore:
             self.conn.execute(
                 "ALTER TABLE tripwires ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
             )
+        # Tier 1.4: fnmatch-style globs so a tripwire can fire on any
+        # prompt whose git diff touches a matching path, not just on a
+        # text keyword match. JSON array of strings. NULL preserves the
+        # pre-Tier-1.4 behavior for every legacy row.
+        if "affected_files" not in existing_cols:
+            self.conn.execute(
+                "ALTER TABLE tripwires ADD COLUMN affected_files TEXT"
+            )
 
     def close(self) -> None:
         self.conn.close()
@@ -204,6 +215,7 @@ class CortexStore:
         source_file: str | None = None,
         violation_patterns: list[str] | None = None,
         status: str = "active",
+        affected_files: list[str] | None = None,
     ) -> None:
         """Insert or update a tripwire.
 
@@ -224,14 +236,15 @@ class CortexStore:
         patterns_json = (
             json.dumps(violation_patterns) if violation_patterns else None
         )
+        files_json = json.dumps(affected_files) if affected_files else None
         with self.conn:
             self.conn.execute(
                 """
                 INSERT INTO tripwires
                     (id, title, severity, domain, triggers, body,
                      verify_cmd, cost_usd, born_at, source_file,
-                     violation_patterns, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     violation_patterns, status, affected_files)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title              = excluded.title,
                     severity           = excluded.severity,
@@ -241,13 +254,14 @@ class CortexStore:
                     verify_cmd         = excluded.verify_cmd,
                     cost_usd           = excluded.cost_usd,
                     source_file        = excluded.source_file,
-                    violation_patterns = excluded.violation_patterns
+                    violation_patterns = excluded.violation_patterns,
+                    affected_files     = excluded.affected_files
                 """,
                 (
                     id, title, severity, domain,
                     json.dumps(triggers),
                     body, verify_cmd, cost_usd, _now_iso(), source_file,
-                    patterns_json, status,
+                    patterns_json, status, files_json,
                 ),
             )
 

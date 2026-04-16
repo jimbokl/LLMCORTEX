@@ -67,6 +67,15 @@ rules:
       - poly_fee_empirical
       - adverse_selection_maker
 
+  - id: poly_live_param_change
+    description: "Agent or user proposes changing live trading params/thresholds"
+    match_any: [change, modify, lower, raise, adjust, tweak, loosen, tighten, price_min, gate, threshold, порог, изменить, перезапуск]
+    and_any: [live, running, bot, param, config, strategy, deploy]
+    inject:
+      - no_live_param_change_without_bt
+      - backtest_must_match_prod
+      - late_lock_replay_traps
+
   - id: poly_fee_pnl
     description: "Any mention of Polymarket fees or PnL calculation"
     match_any: [fee, fees, pnl, taker, base_fee]

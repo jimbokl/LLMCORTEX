@@ -235,6 +235,99 @@ def test_hook_all_shadow_falls_through_to_fallback(monkeypatch, tmp_path):
     assert "shadow_hit" in kinds
 
 
+# ---------- Tier 1.4: git-diff-aware injection ----------
+
+
+def test_git_diff_matches_tripwire_by_filepath(monkeypatch, tmp_path):
+    """Touching a file whose path matches a seed tripwire's `affected_files`
+    glob list must inject that tripwire even when the prompt has no
+    keyword match. Uses the seeded `lookahead_parquet` which has
+    `*features*.py` in its globs.
+    """
+    db = str(tmp_path / "seed.db")
+    run_migration(db)
+    monkeypatch.setenv("CORTEX_DB", db)
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
+    monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
+    monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
+
+    # Stub _fetch_touched_files so the test does not depend on a live
+    # git repo. Pattern `*features*.py` is in the seeded tripwire.
+    monkeypatch.setattr(
+        hook, "_fetch_touched_files",
+        lambda timeout_seconds=2.0: ["DETECTOR/compute_features.py"],
+    )
+
+    # Prompt is generic — rule engine would not inject anything.
+    ret, out = _run_hook(json.dumps({
+        "session_id": "tier14a",
+        "prompt": "clean up the imports in this file",
+    }))
+    assert ret == 0
+    assert out, "expected inject because of touched_files glob match"
+    payload = json.loads(out)
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    assert "lookahead_parquet" in ctx
+
+
+def test_git_diff_failure_is_fail_open(monkeypatch, tmp_path):
+    """Any exception from _fetch_touched_files must yield an empty
+    touched_files list and leave the rest of the hook path untouched.
+    """
+    db = str(tmp_path / "seed.db")
+    run_migration(db)
+    monkeypatch.setenv("CORTEX_DB", db)
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
+
+    def _boom(timeout_seconds=2.0):
+        raise RuntimeError("git not available")
+
+    # Our helper already catches its own exceptions, but verify the
+    # outer hook also tolerates a stricter override via a stub that
+    # simulates a git invocation raising inside subprocess.run.
+    import subprocess
+
+    def _fake_run(*_a, **_kw):
+        raise FileNotFoundError("git not on PATH")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    # Keyword-only match on the seeded rules must still fire.
+    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    ret, out = _run_hook(json.dumps({"session_id": "tier14b", "prompt": prompt}))
+    assert ret == 0
+    assert out, "keyword match must still emit brief despite git failure"
+
+
+def test_git_diff_touched_files_logged_in_inject_event(monkeypatch, tmp_path):
+    """The new `touched_files_matched` field must show up in the jsonl
+    audit so Day-11 DMN and `cortex stats` can attribute injections to
+    the git-diff source.
+    """
+    from cortex.session import read_session
+
+    db = str(tmp_path / "seed.db")
+    run_migration(db)
+    monkeypatch.setenv("CORTEX_DB", db)
+    monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
+
+    monkeypatch.setattr(
+        hook, "_fetch_touched_files",
+        lambda timeout_seconds=2.0: ["DETECTOR/features.py"],
+    )
+
+    ret, _out = _run_hook(json.dumps({
+        "session_id": "tier14c",
+        "prompt": "touch up the file",
+    }))
+    assert ret == 0
+    events = read_session("tier14c")
+    inject_events = [e for e in events if e["event"] == "inject"]
+    assert inject_events, "inject event must be present"
+    matched = inject_events[0].get("touched_files_matched") or []
+    assert "lookahead_parquet" in matched
+
+
 def test_hook_no_shadow_hit_event_when_only_active(monkeypatch, tmp_path):
     """Sanity check: default state (no shadow rows) must not produce
     any `shadow_hit` events."""

@@ -600,6 +600,35 @@ def cmd_status(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------
 
 
+def cmd_sessions_prune(args: argparse.Namespace) -> int:
+    import time
+
+    from cortex.session import prune_sessions, sessions_dir
+
+    if args.days < 0:
+        print("error: --days must be non-negative", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        target = sessions_dir()
+        cutoff = time.time() - args.days * 86400
+        matches = [
+            p.name for p in target.glob("*.jsonl")
+            if p.stat().st_mtime < cutoff
+        ]
+        print(f"[dry-run] would delete {len(matches)} session log(s) older than {args.days}d")
+        for name in matches:
+            print(f"  would-delete {name}")
+        return 0
+
+    n, deleted = prune_sessions(args.days)
+    print(f"Deleted {n} session log(s) older than {args.days}d")
+    if args.verbose and deleted:
+        for name in deleted:
+            print(f"  deleted {name}")
+    return 0
+
+
 def cmd_promote_classify(args: argparse.Namespace) -> int:
     """Classify unclassified surprise pairs via Haiku."""
     from datetime import datetime, timezone
@@ -864,6 +893,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Truncate timeline at N events (default 200)",
     )
     tl.set_defaults(func=cmd_timeline)
+
+    # Day 14: session log rotation.
+    sessions_p = sub.add_parser(
+        "sessions",
+        help="Manage .cortex/sessions/ audit logs (prune/etc.)",
+    )
+    sessions_sub = sessions_p.add_subparsers(dest="sessions_cmd", required=True)
+    prune_p = sessions_sub.add_parser(
+        "prune", help="Delete session logs older than N days"
+    )
+    prune_p.add_argument(
+        "--days", type=int, required=True,
+        help="Age cutoff in days. Files with mtime older than this are removed.",
+    )
+    prune_p.add_argument(
+        "--dry-run", action="store_true",
+        help="Report what would be deleted without touching the filesystem",
+    )
+    prune_p.add_argument(
+        "--verbose", action="store_true",
+        help="List every deleted filename (default only prints the count)",
+    )
+    prune_p.set_defaults(func=cmd_sessions_prune)
 
     ip = sub.add_parser(
         "import-palace",

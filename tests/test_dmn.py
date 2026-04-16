@@ -27,13 +27,16 @@ from cortex.session import log_event
 
 def test_build_session_summary_empty(tmp_path, monkeypatch):
     monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
+    from cortex.importers.memory_md import SEED_TRIPWIRES
+
     db = str(tmp_path / "seed.db")
     run_migration(db)
     s = build_session_summary(days=7, db_path=db)
     assert s["n_sessions"] == 0
     assert s["n_events"] == 0
     assert s["sessions_with_inject"] == 0
-    assert len(s["cold_tripwires"]) == 11  # all seeded tripwires are cold
+    # Every seeded tripwire is cold (never injected) in a fresh store.
+    assert len(s["cold_tripwires"]) == len(SEED_TRIPWIRES)
 
 
 def test_build_session_summary_with_activity(tmp_path, monkeypatch):
@@ -53,18 +56,21 @@ def test_build_session_summary_with_activity(tmp_path, monkeypatch):
     assert s["n_sessions"] == 1
     assert s["sessions_with_inject"] == 1
     assert ("poly_fee_empirical", 1) in s["top_tripwires_hit"]
-    # Cold = 11 seeded minus the 2 that were hit = 9
-    assert len(s["cold_tripwires"]) == 9
+    # Cold = every seeded tripwire minus the 2 that were hit in this test.
+    from cortex.importers.memory_md import SEED_TRIPWIRES
+    assert len(s["cold_tripwires"]) == len(SEED_TRIPWIRES) - 2
 
 
 # ---- build_existing_tripwires_summary ----
 
 
 def test_build_existing_tripwires_summary(tmp_path):
+    from cortex.importers.memory_md import SEED_TRIPWIRES
+
     db = str(tmp_path / "seed.db")
     run_migration(db)
     existing = build_existing_tripwires_summary(db_path=db)
-    assert len(existing) == 11
+    assert len(existing) == len(SEED_TRIPWIRES)
     assert all("id" in tw and "title" in tw for tw in existing)
     ids = {tw["id"] for tw in existing}
     assert "poly_fee_empirical" in ids

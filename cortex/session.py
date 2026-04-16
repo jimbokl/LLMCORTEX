@@ -67,6 +67,41 @@ def log_event(session_id: str, event_type: str, data: dict[str, Any]) -> bool:
         return False
 
 
+def prune_sessions(
+    days: int, sessions_path: Path | None = None
+) -> tuple[int, list[str]]:
+    """Delete `.jsonl` session logs older than `days` days.
+
+    Uses mtime, not the first event timestamp, because a session's
+    filesystem mtime is always within a few seconds of the last
+    `log_event` write. Returns (deleted_count, deleted_filenames) so
+    callers can surface the result in a CLI report or in audit logs.
+
+    Fail-safe: a missing directory yields (0, []) rather than an error.
+    Any unlink failure is swallowed so a locked or permissioned file
+    never aborts a bulk prune.
+    """
+    if days < 0:
+        raise ValueError("days must be non-negative")
+
+    target_dir = sessions_path or sessions_dir()
+    if not target_dir.exists():
+        return 0, []
+
+    import time
+
+    cutoff = time.time() - days * 86400
+    deleted: list[str] = []
+    for path in target_dir.glob("*.jsonl"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                deleted.append(path.name)
+        except OSError:
+            continue
+    return len(deleted), deleted
+
+
 def read_session(session_id: str) -> list[dict[str, Any]]:
     """Read all events for a session. Returns empty list on any error."""
     try:

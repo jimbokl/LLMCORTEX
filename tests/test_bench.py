@@ -46,12 +46,14 @@ def test_measure_warmup_does_not_crash_on_small_n():
 
 
 def test_storage_stats_returns_fields(tmp_path):
+    from cortex.importers.memory_md import SEED_TRIPWIRES
+
     db = _seeded_db(tmp_path)
     st = _storage_stats(db)
     assert st["db_path"] == db
     assert st["db_size_bytes"] > 0
     assert st["db_size_kb"] > 0
-    assert st["n_tripwires"] == 11
+    assert st["n_tripwires"] == len(SEED_TRIPWIRES)
     assert st["n_cost_components"] == 3
     assert st["n_synthesis_rules"] == 1
     assert "by_severity" in st
@@ -135,7 +137,8 @@ def test_run_benchmarks_structure(tmp_path):
     assert "impact" in report
     # Sub-structure
     assert "python_version" in report["env"]
-    assert report["storage"]["n_tripwires"] == 11
+    from cortex.importers.memory_md import SEED_TRIPWIRES as _seed
+    assert report["storage"]["n_tripwires"] == len(_seed)
     assert len(report["brief_sizes"]) == len(TEST_PROMPTS)
 
 

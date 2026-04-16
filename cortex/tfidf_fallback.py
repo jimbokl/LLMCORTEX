@@ -23,12 +23,10 @@ Design notes:
 """
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from cortex.store import CortexStore
-
-_WORD_RE = re.compile(r"[a-z0-9_\-]+")
+from cortex.tokenize import tokenize as _tokenize_shared
 
 _STOPWORDS = frozenset({
     "the", "a", "an", "is", "am", "are", "was", "were", "be", "been", "being",
@@ -54,9 +52,14 @@ DEFAULT_TOP_K = 3
 
 
 def _tokens(text: str) -> set[str]:
-    """Lowercase-tokenize a string into signal-bearing word set."""
+    """Lowercase-tokenize a string into signal-bearing word set.
+
+    Delegates the raw tokenization to `cortex.tokenize.tokenize` (which
+    honors `CORTEX_UNICODE_TOKENS`), then strips short tokens and
+    English stopwords.
+    """
     return {
-        t for t in _WORD_RE.findall(text.lower())
+        t for t in _tokenize_shared(text)
         if len(t) > 1 and t not in _STOPWORDS
     }
 

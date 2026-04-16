@@ -87,6 +87,10 @@ SEED_TRIPWIRES: list[dict] = [
         "violation_patterns": [
             r"slot_ts[^\n]*?=[^\n]*?//\s*\d+[^\n]*?\*\s*\d+\b(?!\s*\+)",
         ],
+        "affected_files": [
+            "*features*.py", "*feature*.py", "*_parquet.py",
+            "*prepare.py", "*prepare_*.py", "*slot*.py",
+        ],
     },
     {
         "id": "directional_5m_dead",
@@ -202,6 +206,10 @@ SEED_TRIPWIRES: list[dict] = [
         "verify_cmd": None,
         "cost_usd": 0.0,
         "source_file": "feedback_late_lock_replay_traps.md",
+        "affected_files": [
+            "late_lock*.rs", "late_lock*.py",
+            "replay_late_lock*.py", "*late_lock*.rs", "*late_lock*.py",
+        ],
     },
     {
         "id": "never_single_strategy",
@@ -282,6 +290,10 @@ SEED_TRIPWIRES: list[dict] = [
         "verify_cmd": None,
         "cost_usd": 0.0,
         "source_file": "feedback_backtest_must_match_prod.md",
+        "affected_files": [
+            "*backtest*.py", "replay_*.py", "*_replay.py",
+            "config.py", "*strategies*.json", "*strategies*.toml",
+        ],
     },
     {
         "id": "real_entry_price",
@@ -345,6 +357,131 @@ SEED_TRIPWIRES: list[dict] = [
         "verify_cmd": None,
         "cost_usd": 0.0,
         "source_file": "Palace: execution/LAG_EXECUTION_REALISM.md + data/LAG_ARB_FULL.md",
+    },
+    {
+        "id": "no_live_param_change_without_bt",
+        "title": "NEVER change live trading params without 100% WR backtest proof",
+        "severity": "critical",
+        "domain": "polymarket",
+        "triggers": [
+            "live", "change", "modify", "param", "threshold", "price_min",
+            "gate", "adjust", "loosen", "tighten", "rebuild", "deploy",
+        ],
+        "body": (
+            "NEVER modify live trading parameters, thresholds, or strategy code without first\n"
+            "proving 100% WR on backtest replay with the proposed changes. Dry spells (no trades\n"
+            "for 1+ hours) are normal market behavior -- the strategy's selectivity IS the edge.\n"
+            "\n"
+            "Why: On 2026-04-12, agent observed a 1-hour dry spell and immediately attempted to\n"
+            "lower price_min from 0.99 to 0.98 for XRP/HYPE and inject debug logging into live\n"
+            "strategy code -- all without any backtest validation. User caught it before binary\n"
+            "rebuild. Loosening params without proof risks turning 100% WR into losers.\n"
+            "\n"
+            "How to apply: (1) If no trades for extended period, diagnose via logs but DO NOT\n"
+            "change params -- dry spells are expected. (2) Before ANY param or code change to live\n"
+            "bot, first run replay_late_lock.py with proposed params and confirm WR=100% at\n"
+            "meaningful n. (3) Never rebuild or restart live binary without explicit user approval\n"
+            "AND backtest proof."
+        ),
+        "verify_cmd": None,
+        "cost_usd": 0.0,
+        "source_file": "feedback_no_live_changes_without_backtest.md",
+    },
+    {
+        "id": "boundary_vs_grid_search",
+        "title": "Boundary analysis (1-axis monotonic) beats grid search for live tuning",
+        "severity": "high",
+        "domain": "polymarket",
+        "triggers": [
+            "tune", "tuning", "sweep", "param", "grid", "search", "optimize",
+            "100", "wr", "wilson", "overfit", "bonferroni",
+        ],
+        "body": (
+            "When proposing live trading parameter changes, prefer single-axis BOUNDARY ANALYSIS\n"
+            "(monotonic widening of one parameter) over multi-dimensional GRID SEARCH. Grid search\n"
+            "creates false 100% WR pockets via multiplicity; boundary analysis with stable WR\n"
+            "plateau is structural evidence.\n"
+            "\n"
+            "Why: 2026-04-12 grid of 240 configs/asset (4 t_min x 3 price_min x 5 gate x 4 depth)\n"
+            "found '100% WR pockets' on n=15-30 — but Bonferroni demands alpha/240 ~ 0.0002, and\n"
+            "Wilson LB at n=24 is only ~93% vs BE ~98.7%. Same day, single-axis t_max sweep 288 ->\n"
+            "295 showed WR=100% holding monotonically at 288/290/292/294/295 with n growing\n"
+            "234 -> 271 — clean structural edge. Plus 295 was the original code default.\n"
+            "\n"
+            "How to apply: (1) Boundary sweep OK to deploy when WR is monotonic across the range\n"
+            "AND n grows AND there's a microstructure rationale. (2) Grid search results = OOS\n"
+            "candidates only, never direct deploy. (3) Always compute Wilson LB for any 100% WR\n"
+            "claim — if LB < BE, it's chance. (4) Suspect any 100% WR on n<50 from a search."
+        ),
+        "verify_cmd": None,
+        "cost_usd": 0.0,
+        "source_file": "feedback_boundary_vs_grid_search.md",
+    },
+    {
+        "id": "ladder_killed_by_dip_rarity",
+        "title": "Late-lock ladder/split DEAD: 10% dip rate, 90% no-dip slots dominate PnL",
+        "severity": "high",
+        "domain": "polymarket",
+        "triggers": [
+            "ladder", "grid", "split", "dip", "average", "down", "scaled",
+            "limit", "maker", "late_lock", "лестница", "сетка",
+        ],
+        "body": (
+            "DO NOT propose grid/ladder/split-entry strategies for late-lock without first\n"
+            "measuring dip frequency in current data. The base IOC at $0.98+ is mathematically\n"
+            "OPTIMAL when dips are rare.\n"
+            "\n"
+            "Why: 2026-04-12 user proposed splitting $45 base into $30 IOC + $15 ladder across\n"
+            "0.97/0.96/0.95/0.92. Backtest on 279 entries showed ALL split configs lose vs\n"
+            "current single $45: $30+ladder = $14.88/d vs current $20.44/d (-27%). Reason:\n"
+            "dips happen in only ~10% of slots after gate=1.0 filter (26/271). In dominant\n"
+            "90% no-dip slots, only base fills, and reducing base from $45 to $30 cuts profit\n"
+            "per win from $0.92 to $0.61. The $0.30 loss x 245 non-dip wins outweighs the\n"
+            "$0.28 gain x 26 dip wins. Dips are rare BECAUSE the filter selects quiet slots --\n"
+            "ladder is testing the wrong distribution.\n"
+            "\n"
+            "How to apply: (1) Lead with dip frequency measurement before any ladder/split\n"
+            "discussion. (2) If dips <30% of entries, splitting is mathematically inferior --\n"
+            "kill the proposal immediately. (3) Addon model (extra capital on top, not split)\n"
+            "shows +$3.52/d in 100% WR backtest but inflates tail risk ~80% in OOS losses --\n"
+            "needs loss-distribution data we don't have."
+        ),
+        "verify_cmd": None,
+        "cost_usd": 0.0,
+        "source_file": "feedback_ladder_killed_by_dip_rarity.md",
+    },
+    {
+        "id": "hope_bias_down_underpriced",
+        "title": "Crypto 5m Polymarket: Down systematically underpriced ~5-10pp (Hope Bias)",
+        "severity": "high",
+        "domain": "polymarket",
+        "triggers": [
+            "down", "up", "side", "directional", "5m", "ladder", "asymmetric",
+            "bias", "favorite", "underpriced", "polymarket",
+        ],
+        "body": (
+            "On crypto 5-min directional Polymarket markets, Down side is systematically\n"
+            "underpriced by ~5-10pp vs true probability due to crowd hope-bias (long-only\n"
+            "crypto holder audience). Displayed Down at e.g. 50.5% has true probability\n"
+            "closer to 58-62%. This creates structural alpha INDEPENDENT of late-lock spread.\n"
+            "\n"
+            "Why: 2026-04-12 user observation after watching SOL 5:30PM ET slot dip from 0.99\n"
+            "to 0.505 mid-flight and resolve Down (won). Audience is overwhelmingly long-biased\n"
+            "crypto holders who anchor on multi-year uptrend (recency), hold spot positions\n"
+            "(loss aversion), follow bull narratives (mimicry), and treat Down bets as 'betting\n"
+            "against my bag'. Live polybot data: 30/30 Down WR + 47/47 Up WR (both 100% at low\n"
+            "n, can't yet distinguish, but structural reasoning predicts Down outperforms at\n"
+            "large n).\n"
+            "\n"
+            "How to apply: (1) When deploying directional ladders, allocate MORE capital to\n"
+            "Down-side slices than Up-side (asymmetric: $1.50 Down / $0.50 Up, same total).\n"
+            "(2) Track per-side WR separately for first 100+ trades to validate. (3) Consider\n"
+            "Down-only deep ladders. (4) Adjust BE: at entry P with bias_pp, true BE = P -\n"
+            "bias_pp, not just P. (5) Don't apply HBH to tradfi (gold/stocks)."
+        ),
+        "verify_cmd": None,
+        "cost_usd": 0.0,
+        "source_file": "feedback_hope_bias_down_underpriced.md",
     },
 ]
 

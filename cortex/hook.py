@@ -26,7 +26,36 @@ walks up from CWD until it finds one.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+
+
+def _fetch_touched_files(timeout_seconds: float = 2.0) -> list[str]:
+    """Return the list of repo-relative paths touched by the working tree.
+
+    Uses `git diff --name-only HEAD` from the hook's CWD (Claude Code
+    launches the hook in the project root). Fail-open: any error —
+    git missing, not a repo, subprocess timeout, non-zero exit — yields
+    an empty list so the hook never stalls or raises because of git.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return []
+        files = [
+            line.strip()
+            for line in completed.stdout.splitlines()
+            if line.strip()
+        ]
+        return files
+    except Exception:
+        return []
 
 
 def main() -> int:
@@ -43,7 +72,11 @@ def main() -> int:
         from cortex.fitness import score_prompt_frustration
         from cortex.verify_runner import run_verifiers_for
 
-        result = classify_prompt(prompt)
+        # Tier 1.4: pull git-touched paths so `affected_files` globs on
+        # tripwires can match edits that the prompt text doesn't mention
+        # (e.g. "clean this up" on an already-open file).
+        touched_files = _fetch_touched_files()
+        result = classify_prompt(prompt, touched_files=touched_files)
         session_id = payload.get("session_id", "") or ""
 
         # Phase 0 (Autonomous Epistemic Loop): score the prompt for
@@ -169,6 +202,9 @@ def main() -> int:
                     ],
                     "blocked": should_block,
                     "prompt_frustration": round(frustration, 3),
+                    "touched_files_matched": result.get(
+                        "touched_files_matched", []
+                    ),
                 },
             )
             if should_block:
