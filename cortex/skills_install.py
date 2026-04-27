@@ -141,7 +141,7 @@ def render_install_report(report: dict[str, Any]) -> str:
         for n in report["installed"]:
             lines.append(f"  + {n}")
     if report["skipped"]:
-        lines.append(f"Skipped (already present, use --force to overwrite):")
+        lines.append("Skipped (already present, use --force to overwrite):")
         for n in report["skipped"]:
             lines.append(f"  = {n}")
     if report["errors"]:

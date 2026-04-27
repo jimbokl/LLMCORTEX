@@ -1,24 +1,88 @@
-# Generic classification rules that apply across domains.
+# Cortex classification rules.
+#
+# Each rule fires when AT LEAST ONE `match_any` token AND AT LEAST ONE
+# `and_any` token are present in the tokenized prompt. When a rule
+# fires, its `inject` tripwires are added to the brief. Keep rules
+# narrow and high-precision — it is better to miss a task than to spam
+# the agent with irrelevant warnings (silent violations kill trust).
+#
+# These ship as templates against the example seed in
+# `cortex/importers/memory_md.py`. Replace them with project-specific
+# rules over time; this file is part of the package and gets overwritten
+# by `pip install --upgrade`, so add your custom rules to a separate
+# `cortex/rules/<your-project>.yml` instead.
 
 rules:
-  - id: paper_trading_config
-    description: "Paper trading configuration (budget / caps / concurrency)"
-    match_any: [paper, "paper-trading"]
-    and_any: [budget, max_slot_cost, max_concurrent, config, cap, slot_cost]
+  - id: prod_deploy
+    description: "Deploying to production / shipping a release"
+    match_any: [deploy, release, ship, rollout, "go-live", launch]
+    and_any: [prod, production, live, main, master, release, customer]
     inject:
-      - no_budget_paper
+      - feature_flag_default_off
+      - backtest_must_match_prod
+      - never_single_strategy
+      - force_push_main_blocked
+
+  - id: db_migration
+    description: "Database schema change / migration"
+    match_any: [migration, migrate, alembic, ddl, schema]
+    and_any: [drop, alter, column, table, rollback, deploy, prod, production]
+    inject:
+      - migration_destructive
+      - backtest_must_match_prod
+
+  - id: feature_pipeline_work
+    description: "Work on feature pipelines / parquets (lookahead risk zone)"
+    match_any: [feature, features, parquet, detector, backfill, label]
+    and_any: [slot, backtest, replay, build, generate, pipeline, training]
+    inject:
+      - lookahead_parquet
 
   - id: backtest_vs_prod_match
-    description: "User asking to compare backtest vs production config"
-    match_any: [backtest, backtester, replay]
-    and_any: [prod, production, live, match, config, cap, risk]
+    description: "Backtest / staging compared against production config"
+    match_any: [backtest, replay, walkforward, simulation, evaluation]
+    and_any: [prod, production, live, match, config, cap, risk, staging]
     inject:
       - backtest_must_match_prod
       - lookahead_parquet
 
-  - id: feature_pipeline_work
-    description: "Work on feature pipelines / parquets (lookahead risk zone)"
-    match_any: [feature, features, parquet, detector, backfill]
-    and_any: [slot, backtest, replay, build, generate, pipeline]
+  - id: paper_eval_config
+    description: "Paper / shadow / evaluation configuration (caps + concurrency)"
+    match_any: [paper, "paper-trading", shadow, evaluation, eval]
+    and_any: [budget, max_slot_cost, max_concurrent, config, cap, slot_cost]
     inject:
-      - lookahead_parquet
+      - no_budget_paper
+
+  - id: security_logging
+    description: "Logging / debug output that could include secrets"
+    match_any: [log, logger, logging, print, debug, dump, trace]
+    and_any:
+      [secret, token, password, key, auth, credential, header, jwt, oauth]
+    inject:
+      - secrets_in_logs
+      - auth_token_in_url
+
+  - id: auth_url_handling
+    description: "Auth token / URL handling"
+    match_any: [token, auth, jwt, oauth, bearer]
+    and_any: [url, query, querystring, redirect, header, param]
+    inject:
+      - auth_token_in_url
+      - secrets_in_logs
+
+  - id: git_force_push
+    description: "Force push or history rewrite on shared branches"
+    match_any: [force, "force-push", rebase, rewrite, "--force"]
+    and_any: [push, main, master, branch, history]
+    inject:
+      - force_push_main_blocked
+
+  - id: prod_param_change
+    description: "Agent or user proposes changing live trading params/thresholds"
+    match_any:
+      [change, modify, lower, raise, adjust, tweak, loosen, tighten,
+       price_min, gate, threshold, порог, изменить, перезапуск]
+    and_any: [live, running, prod, param, config, deploy]
+    inject:
+      - backtest_must_match_prod
+      - feature_flag_default_off

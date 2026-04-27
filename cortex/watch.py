@@ -19,6 +19,7 @@ cortex never blocks tool execution.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 
@@ -124,19 +125,15 @@ def main() -> int:
             for v in violations:
                 log_event(session_id, "potential_violation", v)
                 if store is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         store.record_violation(
                             tripwire_id=v.get("tripwire_id", ""),
                             session_id=session_id,
                             evidence=(v.get("snippet") or "")[:200],
                         )
-                    except Exception:
-                        pass
             if store is not None:
-                try:
+                with contextlib.suppress(Exception):
                     store.close()
-                except Exception:
-                    pass
         except Exception:
             pass
 

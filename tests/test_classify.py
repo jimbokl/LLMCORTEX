@@ -22,13 +22,13 @@ def _write_test_rules(rules_dir: Path) -> None:
                     {
                         "id": "r1",
                         "match_any": ["backtest", "replay"],
-                        "and_any": ["poly", "slot"],
-                        "inject": ["poly_fee_empirical", "lookahead_parquet"],
+                        "and_any": ["prod", "config"],
+                        "inject": ["backtest_must_match_prod", "lookahead_parquet"],
                     },
                     {
                         "id": "r2",
-                        "match_any": ["live"],
-                        "and_any": ["bot", "deploy"],
+                        "match_any": ["deploy"],
+                        "and_any": ["release", "ship"],
                         "inject": ["never_single_strategy"],
                     },
                 ]
@@ -39,18 +39,18 @@ def _write_test_rules(rules_dir: Path) -> None:
 
 
 def test_tokenize_splits_on_non_word():
-    toks = _tokenize("Hello, 5m poly BACKTEST!")
-    assert "5m" in toks
-    assert "poly" in toks
+    toks = _tokenize("Hello, BACKTEST against PROD config!")
     assert "backtest" in toks
+    assert "prod" in toks
+    assert "config" in toks
     assert "hello" in toks
 
 
 def test_match_rule_requires_both_sets():
-    rule = {"match_any": ["backtest"], "and_any": ["poly"]}
-    assert _match_rule(rule, {"backtest", "poly"}) is True
+    rule = {"match_any": ["backtest"], "and_any": ["prod"]}
+    assert _match_rule(rule, {"backtest", "prod"}) is True
     assert _match_rule(rule, {"backtest"}) is False  # missing and_any
-    assert _match_rule(rule, {"poly"}) is False      # missing match_any
+    assert _match_rule(rule, {"prod"}) is False      # missing match_any
     assert _match_rule(rule, {"hello"}) is False
 
 
@@ -64,12 +64,14 @@ def test_classify_no_rules_returns_empty():
         run_migration(db)
         empty_rules = Path(tmp) / "empty_rules"
         empty_rules.mkdir()
-        result = classify_prompt("backtest poly slot", db_path=db, rules_dir=empty_rules)
+        result = classify_prompt(
+            "backtest prod config", db_path=db, rules_dir=empty_rules,
+        )
         assert result["tripwires"] == []
         assert result["matched_rules"] == []
 
 
-def test_classify_matches_poly_backtest():
+def test_classify_matches_backtest_against_prod():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_p = Path(tmp)
         db = str(tmp_p / "seed.db")
@@ -77,13 +79,13 @@ def test_classify_matches_poly_backtest():
         rules_dir = tmp_p / "rules"
         _write_test_rules(rules_dir)
         result = classify_prompt(
-            "I want to run a backtest on 5m poly slot data",
+            "I want to run a backtest against the prod config",
             db_path=db,
             rules_dir=rules_dir,
         )
         assert "r1" in result["matched_rules"]
         ids = {t["id"] for t in result["tripwires"]}
-        assert "poly_fee_empirical" in ids
+        assert "backtest_must_match_prod" in ids
         assert "lookahead_parquet" in ids
 
 
@@ -106,7 +108,9 @@ def test_classify_sorts_tripwires_by_severity():
         run_migration(db)
         rules_dir = tmp_p / "rules"
         _write_test_rules(rules_dir)
-        result = classify_prompt("backtest poly slot", db_path=db, rules_dir=rules_dir)
+        result = classify_prompt(
+            "backtest prod config", db_path=db, rules_dir=rules_dir,
+        )
         severities = [t["severity"] for t in result["tripwires"]]
         sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         assert severities == sorted(severities, key=sev_order.__getitem__)
@@ -129,13 +133,13 @@ def test_classify_truncates_to_max():
                             "match_any": ["all"],
                             "and_any": ["everything"],
                             "inject": [
-                                "poly_fee_empirical",
+                                "secrets_in_logs",
+                                "migration_destructive",
                                 "lookahead_parquet",
-                                "directional_5m_dead",
-                                "adverse_selection_maker",
-                                "information_decay_5m",
-                                "real_entry_price",
+                                "backtest_must_match_prod",
                                 "never_single_strategy",
+                                "feature_flag_default_off",
+                                "force_push_main_blocked",
                             ],
                         }
                     ]
@@ -144,7 +148,7 @@ def test_classify_truncates_to_max():
             encoding="utf-8",
         )
         result = classify_prompt(
-            "all everything", db_path=db, rules_dir=rules_dir, max_tripwires=3
+            "all everything", db_path=db, rules_dir=rules_dir, max_tripwires=3,
         )
         assert len(result["tripwires"]) == 3
         assert result["truncated"] is True
@@ -158,11 +162,13 @@ def test_render_brief_produces_tagged_block():
         run_migration(db)
         rules_dir = tmp_p / "rules"
         _write_test_rules(rules_dir)
-        result = classify_prompt("backtest poly slot", db_path=db, rules_dir=rules_dir)
+        result = classify_prompt(
+            "backtest prod config", db_path=db, rules_dir=rules_dir,
+        )
         brief = render_brief(result)
         assert brief.startswith("<cortex_brief")
         assert brief.endswith("</cortex_brief>")
-        assert "poly_fee_empirical" in brief
+        assert "backtest_must_match_prod" in brief
         assert "CRITICAL" in brief
 
 
@@ -336,11 +342,11 @@ def test_affected_files_empty_list_is_noop():
         _write_test_rules(rules_dir)
         # No touched_files passed at all.
         r1 = classify_prompt(
-            "backtest poly slot", db_path=db, rules_dir=rules_dir
+            "backtest prod config", db_path=db, rules_dir=rules_dir
         )
         # Empty list is equivalent.
         r2 = classify_prompt(
-            "backtest poly slot", db_path=db, rules_dir=rules_dir,
+            "backtest prod config", db_path=db, rules_dir=rules_dir,
             touched_files=[],
         )
         assert {t["id"] for t in r1["tripwires"]} == {t["id"] for t in r2["tripwires"]}
@@ -367,21 +373,21 @@ def test_render_brief_budget_env_non_integer_falls_back_to_default(monkeypatch):
     assert "cortex_brief: truncated" not in brief
 
 
-def test_real_rules_fire_on_replay_basis_arb():
-    """Smoke test using the shipped rules: a real-world prompt that caused
-    the whole project should match `poly_backtest_task` and inject the
-    critical fee/lookahead/entry-price tripwires."""
+def test_real_rules_fire_on_prod_deploy_prompt():
+    """Smoke test using the shipped rules: a real-world prompt about
+    shipping to production should match `prod_deploy` and inject the
+    feature-flag / staging-match / SPOF tripwires."""
     with tempfile.TemporaryDirectory() as tmp:
         db = str(Path(tmp) / "seed.db")
         run_migration(db)
         result = classify_prompt(
-            "run replay_basis_arb.py to backtest Binance lead on 5m poly slots",
+            "let's ship the new pricing release to production today",
             db_path=db,
         )
         assert result["tripwires"], "real rules should fire for this prompt"
         ids = {t["id"] for t in result["tripwires"]}
-        assert "poly_fee_empirical" in ids
-        assert "poly_backtest_task" in result["matched_rules"]
+        assert "feature_flag_default_off" in ids
+        assert "prod_deploy" in result["matched_rules"]
 
 
 def test_render_brief_appends_predict_block_when_critical():
@@ -393,7 +399,9 @@ def test_render_brief_appends_predict_block_when_critical():
         run_migration(db)
         rules_dir = tmp_p / "rules"
         _write_test_rules(rules_dir)
-        result = classify_prompt("backtest poly slot", db_path=db, rules_dir=rules_dir)
+        result = classify_prompt(
+            "backtest prod config", db_path=db, rules_dir=rules_dir,
+        )
         brief = render_brief(result)
         assert "CRITICAL TASK DETECTED" in brief
         assert "<cortex_predict>" in brief
@@ -405,7 +413,6 @@ def test_render_brief_appends_predict_block_when_critical():
 def test_classify_splits_active_and_shadow():
     """Day 15: a rule that injects both an active and a shadow tripwire
     must produce them on separate lists. Synthesis runs over active only."""
-    import sqlite3
 
     from cortex.store import CortexStore
     with tempfile.TemporaryDirectory() as tmp:

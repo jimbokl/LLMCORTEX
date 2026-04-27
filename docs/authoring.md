@@ -12,7 +12,7 @@ A tripwire is a structured lesson. Fields:
 | `id` | str | Unique snake_case id |
 | `title` | str | One-line summary (≤80 chars displays cleanly in `cortex list`) |
 | `severity` | `critical` / `high` / `medium` / `low` | How prominently to inject |
-| `domain` | str | `polymarket`, `generic`, or your project tag |
+| `domain` | str | Free-form tag (e.g. `security`, `database`, `infra`, or your project name) |
 | `triggers` | list[str] | Keyword vocabulary for the classifier |
 | `body` | str | WHY + HOW TO APPLY, 3-6 short paragraphs |
 | `verify_cmd` | str, optional | Bash command that re-checks whether the lesson still holds |
@@ -34,19 +34,23 @@ How to apply: (1) <concrete action>. (2) <concrete action>. (3) <edge case>.
 
 ### Good examples (from the seed set)
 
-- **Specific numbers**: *"Polymarket net fee = 0.072 × min(p, 1−p) × size,
-  NOT 10% flat. At mid prices net fee ~3.6% per side; at extremes <0.4%."*
-- **Quantified past cost**: *"Bots deployed live — backtest showed near-100%
-  WR, real WR 69.6%/74.4%, auto-killed on 3rd consecutive loss."*
-- **Actionable steps**: *"(1) Before any backtest, run a SHIFT TEST — replay
-  with the feature shifted back one slot. If WR drops >10pp, it contains
-  lookahead. (2) 100% WR on >100 trades is ALWAYS suspect — first
-  hypothesis must be lookahead, not 'edge so strong it's perfect'."*
+- **Specific numbers**: *"Joint reliability of N dependencies in series
+  is the product of individual SLAs — three 99.9% deps wired sequentially
+  is 99.7%, three hours of downtime per month, not the marketed 43
+  minutes per dep."*
+- **Quantified past cost**: *"Backtests with the slot_ts lookahead bug
+  routinely show near-100% accuracy on >100 samples. The model deploys,
+  real-time inference uses honest data, accuracy collapses to ~50%."*
+- **Actionable steps**: *"(1) Before any backtest, run a SHIFT TEST —
+  replay with the feature shifted back one decision boundary. If
+  accuracy drops >10pp, it contains lookahead. (2) 100% accuracy on
+  >100 samples is ALWAYS suspect — first hypothesis must be lookahead,
+  not 'edge so strong it is perfect'."*
 
 ### Bad examples
 
-- **Too vague**: "Always be careful with backtests"
-- **Too narrow**: "Use exactly 5.2 as the slippage constant"
+- **Too vague**: "Always be careful with deploys"
+- **Too narrow**: "Use exactly 5.2 as the rate-limit constant in service X"
 - **Unfalsifiable**: "Consider all relevant factors"
 - **Missing WHY**: a rule with no incident behind it is a preference, not
   a tripwire
@@ -63,7 +67,7 @@ cortex add \
   --id my_rule \
   --title "Short summary" \
   --severity high \
-  --domain polymarket \
+  --domain infra \
   --triggers "word1,word2,word3" \
   --body "Rule. Why: incident. How to apply: (1) thing. (2) thing." \
   --cost-usd 42.00
@@ -78,16 +82,16 @@ in `cortex inbox list`:
 
 ```
 $ cortex inbox list
-DRAFT_ID                             SOURCE              ID_FIELD              STATUS
-palace_polymarket_20260411_a3f2c1    palace_polymarket   TODO_snake_case_id    TODO: id,title,triggers
+DRAFT_ID                          SOURCE           ID_FIELD              STATUS
+palace_default_20260411_a3f2c1    palace_default   TODO_snake_case_id    TODO: id,title,triggers
 ```
 
 Edit the draft file in your editor to fill in real `id`, `title`,
 `triggers`, and `body`. Then:
 
 ```bash
-cortex inbox show palace_polymarket_20260411_a3f2c1    # verify status READY
-cortex inbox approve palace_polymarket_20260411_a3f2c1  # promotes to store
+cortex inbox show palace_default_20260411_a3f2c1    # verify status READY
+cortex inbox approve palace_default_20260411_a3f2c1  # promotes to store
 ```
 
 Use `cortex inbox reject <draft_id>` to discard a draft you decided
@@ -104,7 +108,7 @@ append to `SEED_TRIPWIRES`:
     "id": "my_rule",
     "title": "Short summary",
     "severity": "high",
-    "domain": "polymarket",
+    "domain": "infra",
     "triggers": ["word1", "word2", "word3"],
     "body": (
         "Rule statement here.\n"
@@ -142,11 +146,11 @@ set.
 
 ### Rule authoring tips
 
-- **Narrow triggers beat broad triggers.** `match_any: [poly, polymarket]`
-  is fine; `match_any: [p]` is not.
+- **Narrow triggers beat broad triggers.** `match_any: [migration, alembic]`
+  is fine; `match_any: [m]` is not.
 - **Always require an `and_any` disambiguator.** A rule with only
-  `match_any: [fee]` fires on every mention of "fee" regardless of context.
-  Add `and_any: [poly, backtest]` to narrow it.
+  `match_any: [drop]` fires on every mention of "drop" regardless of
+  context. Add `and_any: [column, table, schema]` to narrow it.
 - **Test before shipping.** Run the prompt through `cortex-hook` in the
   terminal to see what it matches:
 
@@ -164,11 +168,11 @@ synthesizer can sum them.
 
 ```python
 {
-    "id": "pm_5m_spread",
-    "tripwire_id": "directional_5m_dead",
-    "metric": "spread_slip",
-    "value": 2.4,
-    "unit": "pp",
+    "id": "deploy_no_ff_risk",
+    "tripwire_id": "feature_flag_default_off",
+    "metric": "rollout_risk",
+    "value": 3.0,
+    "unit": "pts",
     "sign": "drag",          # or "boost"
 },
 ```
@@ -179,7 +183,7 @@ Add to `SEED_COST_COMPONENTS` in the importer.
 *quantifiable cumulative cost* that can be summed with other drags. The
 `cost_usd` field on a tripwire is NOT a cost component — that's the
 past incident cost. Cost components are for ongoing drags like
-`spread = 2.4pp`, `latency_penalty = 50ms`, `edge_per_trade = −0.3pp`
+`rollout_risk = 3 pts`, `latency_penalty = 50ms`, `edge_per_trade = −0.3pp`
 that only matter when combined.
 
 ## Synthesis rules
@@ -189,18 +193,18 @@ above a threshold, fire with this message*.
 
 ```python
 {
-    "id": "pm_5m_directional_block",
-    "triggers": ["5m", "directional", "poly"],
+    "id": "prod_deploy_unsafe",
+    "triggers": ["deploy", "release", "ship", "rollout"],
     "sum_over": [
-        "pm_5m_spread",
-        "pm_5m_info_decay",
-        "pm_5m_adverse_sel",
+        "deploy_no_ff_risk",
+        "deploy_staging_drift_risk",
+        "deploy_spof_risk",
     ],
     "threshold": 5.0,
     "op": "gte",                 # gte | gt | lte | lt
     "message": (
-        "Sum drag = {sum}pp ({n} components) >= {threshold}pp floor. "
-        "Any directional 5m strategy needs pre-fee edge > {sum}pp."
+        "Sum unmitigated deploy risk = {sum} pts ({n} components) >= "
+        "{threshold} pts floor. Resolve each before shipping."
     ),
 },
 ```
@@ -302,7 +306,7 @@ After a week of real usage, `cortex stats --sessions` shows:
 
 ```
 Tripwire effectiveness (violation rate = viol / hits):
-  [OK  ] poly_fee_empirical      hits=16  viol=0   rate=0.00
+  [OK  ] secrets_in_logs         hits=16  viol=0   rate=0.00
   [WARN] lookahead_parquet       hits=6   viol=1   rate=0.17
   [FAIL] bad_tripwire            hits=8   viol=5   rate=0.62
 ```
@@ -384,7 +388,7 @@ cortex-check-my-thing = "cortex.verifiers.check_my_thing:main"
 Wire it to a tripwire:
 
 ```python
-"verify_cmd": "cortex-check-my-thing --target-dir POLY/SRC/",
+"verify_cmd": "cortex-check-my-thing --target-dir src/",
 ```
 
 ## Severity picker

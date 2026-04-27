@@ -10,8 +10,6 @@ stem and can match english-authored triggers in the same prompt.
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from cortex import tokenize as tokenize_mod
@@ -28,8 +26,8 @@ def test_tokenize_unicode_flag_off_by_default():
     # Mixed RU + EN prompt, default mode. Cyrillic must be dropped so
     # the Day-1 invariant survives — the english tokens still come
     # through unchanged for downstream rule matching.
-    out = tokenize("запусти бэктест polymarket 5 минут")
-    assert "polymarket" in out
+    out = tokenize("запусти бэктест production 5 минут")
+    assert "production" in out
     assert "5" in out
     # No cyrillic tokens in default mode.
     assert all(not _has_cyrillic(t) for t in out)
@@ -37,8 +35,8 @@ def test_tokenize_unicode_flag_off_by_default():
 
 def test_tokenize_unicode_flag_preserves_cyrillic(monkeypatch):
     monkeypatch.setenv("CORTEX_UNICODE_TOKENS", "1")
-    out = tokenize("запусти бэктест polymarket")
-    assert "polymarket" in out
+    out = tokenize("запусти бэктест production")
+    assert "production" in out
     # The russian forms — either the raw surface form or the stem —
     # must be present so a trigger authored either way still matches.
     assert any("бэктест" in t for t in out)
@@ -56,18 +54,18 @@ def test_tokenize_unicode_collapses_russian_inflection(monkeypatch):
 def test_tokenize_default_identical_to_legacy_regex():
     # Byte-for-byte parity with the old `[a-z0-9_\-]+` behavior on
     # an ASCII prompt, so every Day-2 guard keeps passing.
-    out = tokenize("run a 5m poly directional backtest")
-    assert out == {"run", "a", "5m", "poly", "directional", "backtest"}
+    out = tokenize("run a quick production backtest")
+    assert out == {"run", "a", "quick", "production", "backtest"}
 
 
 def test_tokenize_unicode_does_not_corrupt_ascii_tokens(monkeypatch):
     # English tokens must not be passed through the RU stemmer even
     # under the flag — the stemmer is gated on Cyrillic presence.
     monkeypatch.setenv("CORTEX_UNICODE_TOKENS", "1")
-    out = tokenize("backtest slots directional")
+    out = tokenize("backtest production deploy")
     assert "backtest" in out
-    assert "slots" in out
-    assert "directional" in out
+    assert "production" in out
+    assert "deploy" in out
 
 
 def test_unicode_enabled_helper_honors_env(monkeypatch):

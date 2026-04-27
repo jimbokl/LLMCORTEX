@@ -41,21 +41,21 @@ _ASSUMED_PREVENTED_MISTAKE_TOKENS = 3000  # one wasted tool-call cycle
 TEST_PROMPTS: list[tuple[str, str]] = [
     ("trivial_irrelevant", "hi"),
     ("short_irrelevant", "what time is it"),
-    ("short_matching", "poly backtest"),
-    ("medium_matching", "run a 5m poly directional backtest on btc"),
+    ("short_matching", "production deploy"),
+    ("medium_matching", "run a backtest against the prod config caps"),
     (
         "long_matching",
-        "I want to test a late-lock strategy on 5m polymarket "
-        "slots using binance lead for timing and real entry prices",
+        "I want to ship the new pricing feature to production and roll it "
+        "out behind a feature flag with monitoring and a rollback plan",
     ),
     (
         "long_irrelevant",
         "write me a python function that sorts a list of strings by length",
     ),
-    ("russian_with_kw", "покажи мне статистику по pnl для poly backtest"),
+    ("russian_with_kw", "запусти backtest на prod config перед deploy"),
     ("russian_no_kw", "какая сегодня погода и что нового"),
-    ("fallback_only_fee", "what are the fee mechanics for traders"),
-    ("live_deploy", "should I deploy my new live bot for polymarket"),
+    ("fallback_only_secrets", "remember to redact tokens before logging"),
+    ("live_deploy", "should I deploy my new release to production today"),
 ]
 
 
@@ -144,7 +144,7 @@ def _subsystem_latency(db_path: str, iterations: int) -> dict[str, dict]:
     from cortex.tfidf_fallback import fallback_search
 
     latency: dict[str, dict] = {}
-    prompt = "run a 5m poly directional backtest on btc with binance lead"
+    prompt = "run a backtest against the production config before deploying"
 
     # 1. Tokenize (pure regex + set ops)
     latency["tokenize"] = _measure(
@@ -164,16 +164,18 @@ def _subsystem_latency(db_path: str, iterations: int) -> dict[str, dict]:
         # 3. Fallback search (in-process, store already open)
         latency["fallback_search"] = _measure(
             lambda: fallback_search(
-                "покажи фичи по pnl для poly", store,
+                "redact secrets before logging the request body", store,
             ),
             n=iterations,
         )
 
-        # 4. Synthesize over realistic matched set
+        # 4. Synthesize over realistic matched set — must reference
+        # tripwires that own a cost component in the seed, otherwise
+        # the synthesizer correctly returns no fired rules.
         matched_ids = {
-            "directional_5m_dead",
-            "information_decay_5m",
-            "adverse_selection_maker",
+            "feature_flag_default_off",
+            "backtest_must_match_prod",
+            "never_single_strategy",
         }
         latency["synthesize"] = _measure(
             lambda: synthesize(matched_ids, store),
@@ -227,7 +229,7 @@ def _hook_subprocess_latency(iterations: int = 10) -> dict[str, Any] | None:
 
     test_json = json.dumps({
         "session_id": "bench",
-        "prompt": "run a 5m poly directional backtest on btc",
+        "prompt": "run a backtest against the production config",
     })
 
     samples: list[float] = []

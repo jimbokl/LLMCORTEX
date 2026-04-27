@@ -317,11 +317,17 @@ def render_brief(result: dict[str, Any]) -> str:
     if synth_list:
         lines.append("SYNTHESIS (cumulative cost from matched tripwires):")
         for s in synth_list:
+            # All components in a synthesis rule should share a unit;
+            # fall back to "" if the rule fired with zero components
+            # (which is impossible by construction, but keep render
+            # defensive so a partial seed never crashes the brief).
+            comps = s.get("components") or []
+            unit = comps[0]["unit"] if comps else ""
             lines.append(
-                f"  {s['id']}: Sum = {s['total']}pp "
-                f"(threshold {s['threshold']}pp, op {s['op']})"
+                f"  {s['id']}: Sum = {s['total']}{unit} "
+                f"(threshold {s['threshold']}{unit}, op {s['op']})"
             )
-            for c in s["components"]:
+            for c in comps:
                 prefix = "+" if c["sign"] == "drag" else "-"
                 lines.append(
                     f"    {prefix}{c['value']}{c['unit']:<4} "

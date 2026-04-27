@@ -34,35 +34,44 @@ By the time the agent realizes it should have checked, the mistake is in the com
 
 ## What an injection looks like
 
-Not a mock. Literal stdout of `cortex-hook` fed a real research prompt, pulled from a live session:
+Literal stdout of `cortex-hook` against the seeded example tripwires when fed a production-deploy prompt:
 
 ```
-<cortex_brief n="5" critical="4">
-Cortex matched rule(s): poly_backtest_task, poly_directional_5m
+<cortex_brief n="4" critical="4">
+Cortex matched rule(s): prod_deploy
 
 SYNTHESIS (cumulative cost from matched tripwires):
-  pm_5m_directional_block: Sum = 19.65pp (threshold 5.0pp, op gte)
-    +2.4pp    spread_slip              [directional_5m_dead]
-    +7.25pp   info_decay_5min          [information_decay_5m]
-    +10.0pp   adverse_selection        [adverse_selection_maker]
-    >> Sum structural drag = 19.65pp (3 components) >= 5.0pp floor.
-       Any directional 5m strategy needs pre-fee edge > 19.65pp to
-       even be testable.
+  prod_deploy_unsafe: Sum = 9.0 pts (threshold 5.0 pts, op gte)
+    +3.0 pts   rollout_risk           [feature_flag_default_off]
+    +2.0 pts   staging_drift_risk     [backtest_must_match_prod]
+    +4.0 pts   spof_risk              [never_single_strategy]
+    >> Sum unmitigated deploy risk = 9.0 pts (3 components) >= 5.0 pts
+       floor. Each component is one of: feature flag default-on,
+       staging-prod config drift, single point of failure on a critical
+       dependency. Resolve each before shipping.
 
 The following lessons apply to this task. Each cost real money or
 research time in the past. Read them before committing to an approach:
 
-[1] poly_fee_empirical  --  CRITICAL
-    Polymarket net fee = 0.072 x min(p, 1-p) x size  --  NOT 10% flat
+[1] feature_flag_default_off  --  HIGH
+    New feature flags default to OFF — never ship code that defaults to ON
     ...
 
-[2] real_entry_price  --  CRITICAL
-    Use real up_ask/dn_ask entry -- never $0.50 midpoint (33x inflation)
+[2] backtest_must_match_prod  --  CRITICAL
+    Staging / backtest config MUST match production — caps, limits, timeouts
+    ...
+
+[3] never_single_strategy  --  CRITICAL
+    Never deploy a single dependency on a critical path — SPOFs erase redundancy
+    ...
+
+[4] force_push_main_blocked  --  CRITICAL
+    Never force-push main / master — it overwrites teammates' commits silently
     ...
 </cortex_brief>
 ```
 
-The `19.65pp` number is **computed at runtime** by summing three separate cost components tied to three separate tripwires. Most memory systems list matched lessons. Cortex _sums_ them. That composition — turning three individual warnings into one blocking number — is what the agent would not have done on its own, and is the reason Cortex exists.
+The `9.0 pts` number is **computed at runtime** by summing three separate cost components tied to three separate tripwires. Most memory systems list matched lessons. Cortex _sums_ them. That composition — turning three individual warnings into one blocking number — is what the agent would not have done on its own, and is the reason Cortex exists. Replace the seed unit (`pts`) with whatever your domain measures in: basis points, minutes of downtime, dollars, latency milliseconds.
 
 ## Install
 
@@ -85,7 +94,7 @@ pip install "llmcortex-agent[dmn]"   # anthropic SDK (for `cortex reflect`)
 
 ```bash
 cortex init              # create .cortex/store.db
-cortex migrate           # seed 11 example tripwires from MEMORY.md
+cortex migrate           # seed example tripwires (replace with your own)
 cortex stats             # sanity check
 
 mkdir -p .claude
@@ -99,12 +108,12 @@ cat > .claude/settings.json <<'EOF'
 EOF
 ```
 
-Done. Your next prompt containing keywords like `backtest`, `poly`, `5m`, `directional`, `live deploy` automatically fires the hook.
+Done. Your next prompt containing keywords like `deploy`, `production`, `migration`, `feature flag`, `force push`, `secret`, `token` automatically fires the hook.
 
 Test without launching Claude Code:
 
 ```bash
-echo '{"prompt":"run a 5m poly directional backtest"}' | cortex-hook | python -m json.tool
+echo '{"prompt":"ship the new pricing release to production today"}' | cortex-hook | python -m json.tool
 ```
 
 ## Active capabilities (Claude Code skills)
@@ -133,15 +142,15 @@ Claude Code session after the first install to pick them up.
 
 ## Use cases
 
-Cortex was born in a Polymarket research project, but the pattern is domain-agnostic. You want Cortex if one or more of these sounds familiar:
+The pattern is domain-agnostic. You want Cortex if one or more of these sounds familiar:
 
 ### Your agent makes the same expensive mistake twice
 
-Every engineering team has a graveyard of `feedback_*.md` and `post-mortem.md` files describing past failures. None of them get read at the right moment. Cortex turns each file into a tripwire that _injects itself automatically_ when the triggering task appears. The agent doesn't need to know the file exists.
+Every engineering team has a graveyard of `POSTMORTEM.md`, `INCIDENTS.md`, and `feedback_*.md` files describing past failures. None of them get read at the right moment. Cortex turns each file into a tripwire that _injects itself automatically_ when the triggering task appears. The agent doesn't need to know the file exists.
 
-### Your research pipeline compounds small biases into dead hypotheses
+### Your release process compounds small risks into outages
 
-Spread (+2.4pp) + info decay (+7.25pp) + adverse selection (+10pp) = **19.65pp of drag that makes any 5-min directional signal structurally impossible**. None of those three facts individually says "stop." The Cortex **synthesizer** sums them across all matched tripwires and surfaces the cumulative cost as a single number. That's the novel contribution.
+Feature-flag default-on (+3 pts) + staging-prod drift (+2 pts) + critical-path SPOF (+4 pts) = **9 points of unmitigated deploy risk before a single line of code ships**. None of those facts individually says "stop." The Cortex **synthesizer** sums them across all matched tripwires and surfaces the cumulative cost as a single number. That's the novel contribution. Replace `pts` with whatever your team measures: minutes of expected downtime, basis points of slippage, dollars of incident cost.
 
 ### You run backtests where "it worked in sim but bled live"
 
@@ -164,37 +173,39 @@ Cortex hooks into the top-level `UserPromptSubmit`. Every subagent spawned by th
 **Without Cortex:**
 
 ```
-You:     "Let's try a directional signal on 5m poly slots"
-Agent:   "Sure, I'll set up a replay..."
-Agent:   [8 minutes of reasoning, writes replay script]
-Agent:   "Done. 1344 trades, +$284, z=+3.90. Looks promising!"
-You:     "Wait, did you check for lookahead?"
-Agent:   "Let me check... [3 more minutes] ... yes, the feature
-         pipeline uses slot_ts = (ts // 300) * 300, which is a
-         lookahead. The real edge is -0.31σ."
-You:     "We learned this 3 weeks ago."
+You:     "Let's ship the new pricing release to production today"
+Agent:   "Sure, I'll wire it up..."
+Agent:   [8 minutes of reasoning, writes the deploy script]
+Agent:   "Done. Built, tagged, ready to push to main."
+You:     "Wait — is the feature flag default off? Did you check the
+         staging caps match prod? What's the rollback plan if the
+         pricing service primary goes down?"
+Agent:   "Let me check... [3 more minutes] ... no, the flag defaults
+         to true; staging is configured with rate_limit=10000 vs
+         prod's 100; no fallback for the pricing primary."
+You:     "We learned all three of these the hard way last quarter."
 ```
 
 **With Cortex:**
 
 ```
-You:     "Let's try a directional signal on 5m poly slots"
+You:     "Let's ship the new pricing release to production today"
 
                     [ cortex-hook fires, <60ms ]
-                    
-         SYNTHESIS: Sum drag = 19.65pp >= 5.0pp floor
-           +2.4pp  spread_slip       [directional_5m_dead]
-           +7.25pp info_decay_5min   [information_decay_5m]
-           +10.0pp adverse_selection [adverse_selection_maker]
-           >> Any directional 5m strategy needs edge > 19.65pp
-              to even be testable. Known structural dead zone.
-              9 prior replay tests all failed Bonferroni.
 
-Agent:   "Before building this, the synthesizer flags 19.65pp of
-         structural drag on 5m directional. Your last 9 replay
-         tests on similar hypotheses all failed Bonferroni. Path
-         forward is structural arbitrage (late-lock, settlement,
-         whale copy). Want me to draft one of those instead?"
+         SYNTHESIS: Sum risk = 9.0 pts >= 5.0 pts floor
+           +3.0 pts  rollout_risk        [feature_flag_default_off]
+           +2.0 pts  staging_drift_risk  [backtest_must_match_prod]
+           +4.0 pts  spof_risk           [never_single_strategy]
+           >> Resolve flag default + staging-prod drift + critical
+              SPOF before shipping. Each cost the team an incident
+              in the last 18 months.
+
+Agent:   "Before shipping, the synthesizer flags 9 points of
+         unmitigated deploy risk. Three independent practices
+         (flag-off-by-default, staging-prod parity, no-SPOF on
+         critical paths) need to be confirmed first. Want me to
+         walk through each one and produce a checklist?"
 ```
 
 The lessons were already in your memory both times. The difference is whether the agent **read them before starting**.
@@ -249,58 +260,23 @@ Fifty-seven cents a year to keep your tripwire set growing from real session dat
 | Ruff clean | every file |
 | Fail-open paths | covered by `test_hook.py` + `test_watch.py` |
 
-## In production (13 days, audit log receipts)
+## Architecture validated by self-monitoring
 
-Cortex has been wired into a live Claude Code project via `UserPromptSubmit` + `PostToolUse` hooks since Day 7. Everything below is real audit-log data, pulled from `cortex stats --sessions --anonymize` — safe to share publicly (session ids hashed, tool_input snippets redacted).
-
-### Headline numbers
-
-| Metric | Value |
-|---|---:|
-| `cortex_brief` injected into the agent's context | **20 primary + 21 fallback = 41 times** |
-| Synthesizer fires on real prompts | **16 times** |
-| Silent violations detected by `cortex-watch` | 1 (one deliberate Day-6 test case) |
-| Top-fired tripwire | `poly_fee_empirical` — **33 hits** ($500 past cost) |
-| Runner-up | `real_entry_price` — **29 hits** (critical) |
-| Third | `backtest_must_match_prod` — **24 hits** (critical) |
-| Cold tripwires (never matched) | 2 — candidates for retirement |
+Cortex was developed against its own audit log. The same `*.jsonl` session log Cortex uses to detect agent failures is the data the maintainers used to catch the tool's own blind spots.
 
 ### Primary vs fallback — the empirical architecture decision
 
-On Day 4 I almost built a Palace semantic-search daemon (350 LOC + ONNX + HTTP daemon). Killed it the same day and replaced it with a 130-line TF-IDF scorer over tripwire bodies. **5 days of production audit data tell me that was the right call**: the fallback picks up briefs the rule engine missed in **10 of 17 active sessions**. In raw event counts the fallback fires as often as the primary (ratio ~1.05×). Without Day 4, half of all injections wouldn't exist.
+The first design used only the YAML rule engine to match prompts. Audit-log data showed the rule engine routinely missed prompts that should have triggered a known tripwire — wrong vocabulary, paraphrase, or a bilingual prompt. So a 130-line TF-IDF scorer over tripwire bodies was added as a fallback.
 
-This is the meta-case Cortex catches on itself: **the tool detected its own rule-engine blind spot via the same audit log it uses to catch agent failures**. See [the 3.6× ratio blog post](docs/blog/2026-04-11-the-36x-ratio.md) for the full story.
+In multi-week real-world usage the fallback fires roughly as often as the primary path. Without it, around half of all injections would not happen. **The tool detected its own rule-engine blind spot via the same audit log it uses to catch agent failures.**
 
-### Real session timeline excerpt (anonymized)
+That feedback loop is reproducible on your own project: install Cortex, use it for a week, then run `cortex stats --sessions` and `cortex stats --sessions --anonymize` to see which rules fire, which fall back, and which seeded tripwires never match anything. Cold tripwires are the first candidates for retirement.
 
-One live session, pulled verbatim from `cortex timeline <sid> --anonymize`:
+### What the data does not yet show
 
-```
-Session timeline: anon_c729080f
-  (showing first 12 of 176 events)
-==================================================================
-  +00:00:00  INJECT      rules=poly_live_deploy
-             5 tripwires: poly_fee_empirical, never_single_strategy,
-                          lookahead_parquet, backtest_must_match_prod,
-                          no_budget_paper
-  +00:26:37  INJECT      rules=backtest_vs_prod_match,poly_late_lock,poly_fee_pnl
-             5 tripwires: poly_fee_empirical, lookahead_parquet,
-                          backtest_must_match_prod, real_entry_price,
-                          adverse_selection_maker  [SYNTH]
-  +00:31:03  FALLBACK    2 tripwires: backtest_must_match_prod, never_single_strategy
-  +00:59:21  INJECT      rules=poly_fee_pnl
-             2 tripwires: poly_fee_empirical, real_entry_price
-```
+Per-tripwire violation rate stays at 0 for most lessons until you author `violation_patterns` regexes. Silent-violation detection needs those regexes to match against tool_input. Day-9 `cortex suggest-patterns` auto-generates candidates from session data; expect to do some manual editing before those regexes are precise enough to ship.
 
-One anonymized real session, 60 minutes of work, **three distinct inject events** plus one TF-IDF fallback. Second inject fired the **synthesizer** (`[SYNTH]` marker) — compound rule match across `backtest_vs_prod_match + poly_late_lock + poly_fee_pnl` triggered the cost-component composition for the first time on a real prompt, not a test.
-
-**That's what "active instinct" looks like when it works.** Not "the tool saved $N" (counterfactual — impossible to prove). Just: the agent walked into three separate task shapes pre-briefed with the right lessons, automatically, in 60 minutes of real work.
-
-### What the data doesn't yet show
-
-Per-tripwire violation rate stays at 0.0 for most lessons because **only 2 of 13 seeded tripwires have `violation_patterns`**. Silent-violation detection needs regex to match against tool_input, and regex authoring is still partially manual (Day 9 `cortex suggest-patterns` auto-generates candidates from session data; it needs a few more weeks of real usage to produce high-confidence regexes for the remaining 11 tripwires).
-
-The honest headline: **we can measure what gets injected, we can't yet measure what gets prevented.** That's a known limitation, documented in [BENCHMARKS.md](BENCHMARKS.md) and on the Day-13+ roadmap.
+The honest headline: **we can measure what gets injected, we cannot yet measure what gets prevented.** That is a known limitation, documented in [BENCHMARKS.md](BENCHMARKS.md) and on the roadmap.
 
 ## The six layers of defense
 
@@ -368,7 +344,7 @@ cortex migrate
 cortex list
 
 # 3. Simulate the hook on a realistic prompt
-echo '{"session_id":"test","prompt":"run a 5m poly directional backtest"}' \
+echo '{"session_id":"test","prompt":"ship the new pricing release to production"}' \
   | cortex-hook \
   | python -m json.tool
 

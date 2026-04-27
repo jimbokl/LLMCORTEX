@@ -291,7 +291,7 @@ def build_prompt(
     "id": "snake_case_id_under_40_chars",
     "title": "one-line summary under 80 chars",
     "severity": "high",
-    "domain": "polymarket",
+    "domain": "your_domain_here",
     "triggers": ["word1", "word2", "word3"],
     "body": "One-sentence rule statement.\\n\\nWhy: specific incident or pattern.\\n\\nHow to apply: (1) action. (2) action. (3) edge case.",
     "violation_patterns": [],

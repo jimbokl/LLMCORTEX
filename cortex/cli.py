@@ -174,12 +174,11 @@ def cmd_timeline(args: argparse.Namespace) -> int:
 
 
 def cmd_import_palace(args: argparse.Namespace) -> int:
-    """Query Palace and emit tripwire draft templates the user can
-    copy into cortex/importers/memory_md.py after review.
+    """Query Palace and emit tripwire draft templates for review.
 
     This is a smart-search helper: Palace stays authoritative for
     broad semantic recall, Cortex stays authoritative for active
-    injection. The human in the loop is intentional -- automatic
+    injection. The human in the loop is intentional — automatic
     drawer-to-tripwire promotion would dilute the curated signal.
     """
     if not args.palace_path:
@@ -280,8 +279,8 @@ def cmd_import_palace(args: argparse.Namespace) -> int:
         for line in text.splitlines():
             print(f"    {line}")
         print()
-        print("    Draft tripwire to review and paste into")
-        print("    cortex/importers/memory_md.py SEED_TRIPWIRES:")
+        print("    Draft tripwire to review and paste into your project's")
+        print("    SEED_TRIPWIRES list (cortex/importers/memory_md.py):")
         print()
         print("    {")
         print('        "id": "TODO_snake_case_id",')
@@ -806,7 +805,7 @@ def cmd_promote_log(args: argparse.Namespace) -> int:
     for r in rows:
         meta = r.get("metadata") or {}
         fit = meta.get("fitness")
-        fit_str = f" fit={fit:+.2f}" if isinstance(fit, (int, float)) else ""
+        fit_str = f" fit={fit:+.2f}" if isinstance(fit, int | float) else ""
         print(
             f"  {r['at']:<25} {r['tripwire_id']:<28} "
             f"{r['from_status']:>8} -> {r['to_status']:<8} "
@@ -941,8 +940,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ip.add_argument(
         "--wing",
-        default=os.environ.get("CORTEX_PALACE_WING", "polymarket"),
-        help="Palace wing to search (env: CORTEX_PALACE_WING, default: polymarket)",
+        default=os.environ.get("CORTEX_PALACE_WING", "default"),
+        help="Palace wing to search (env: CORTEX_PALACE_WING, default: default)",
     )
     ip.add_argument(
         "--to-inbox",

@@ -11,7 +11,6 @@ from cortex.fitness import (
     score_prompt_frustration,
 )
 
-
 # --------------------------------------------------------------------
 # score_prompt_frustration
 # --------------------------------------------------------------------
@@ -55,7 +54,7 @@ def test_frustration_empty_and_none_safe():
 
 def test_surprise_match_requires_minimum_overlap():
     bodies = {
-        "fee_rule": "Polymarket fee formula 0.072 times min price times size",
+        "fee_rule": "Stripe processing fee formula 0.029 times charge plus 30 cents",
     }
     # Only one content token ("fee") overlaps -- below min_overlap=3.
     assert match_surprise_to_tripwires("fee", bodies) == []
@@ -319,8 +318,8 @@ def test_render_fitness_block_sorts_descending_by_fitness():
         },
     }
     out = render_fitness_block(fit)
-    high_line = next(i for i, l in enumerate(out) if "high" in l)
-    low_line = next(i for i, l in enumerate(out) if "low" in l)
+    high_line = next(i for i, line in enumerate(out) if "high" in line)
+    low_line = next(i for i, line in enumerate(out) if "low" in line)
     assert high_line < low_line
 
 

@@ -33,32 +33,34 @@ incident. Memory didn't fail — there was nothing in memory to fail with.
 
 ### Failure 2 — Laziness: the lesson existed but was never loaded
 
-The narrative "Polymarket taker fee is 10% flat" appeared in code comments,
-logs, and docs. The empirical formula
-`fee = 0.072 × min(p, 1−p) × size_shares` was derivable from a single
-on-chain round-trip test that the agent had access to. **The test was
-never run.** Weeks of mid-price classical-alpha research produced PnL
-numbers that were wrong by ~60% until the test was finally executed.
-
-Memory had relevant hints. The agent never queried them.
+A team had documented post-mortems for "we shipped a feature flag that
+defaulted to ON and could not roll back without a code revert." The
+write-up sat in `POSTMORTEM.md` for months. Three more incidents shipped
+the same flag pattern before anyone connected the documents to the
+PRs in flight. Memory had the relevant lesson; the agent reasoning about
+each new PR never queried for it.
 
 **Prevention requires active injection of lessons into working context.**
 
 ### Failure 3 — Ignored: lessons were loaded but never synthesized
 
-A single session launched 9 replay tests of directional 5m Polymarket
-hypotheses. Three independent warnings were **already in the loaded
-context** at the start of the session:
+A team prepared a routine release. Three independent warnings were
+**already in the loaded context** at the start of the session:
 
-- `feedback_information_decay_5m.md` — 1.45pp of edge lost per minute of delay
-- `feedback_adverse_selection_maker.md` — 10–14pp WR drop on maker fills
-- `feedback_late_lock_replay_traps.md` — 2.4pp spread+slip floor per trade
+- `feedback_feature_flag_default_off.md` — flag defaults to ON in this PR
+- `feedback_backtest_must_match_prod.md` — staging rate limit is 100×
+  prod, the load test does not represent reality
+- `feedback_never_single_strategy.md` — pricing service has no fallback;
+  one upstream blip means a customer-facing 500
 
-None of the 9 tests survived structural costs. The three warnings sum to
-approximately **19.65pp of cumulative drag**, which kills any directional
-signal under 20pp pre-fee — and that ceiling is unreachable on 5m data.
-**Nobody ever summed them.** Each warning was seen as independent, so none
-triggered the "walk away" decision individually.
+None of the three felt blocking on its own. **Nobody ever summed them.**
+The release shipped, the upstream blipped within ten minutes, no
+fallback existed, monitoring did not register the wrong rate-limit
+config in time, and the rollback button was a code revert.
+
+Each warning was seen as independent, so none triggered the "walk away"
+decision individually. Cortex's synthesizer turns the three warnings
+into one explicit cumulative risk number.
 
 **Prevention requires cost-component summation across loaded lessons.**
 
@@ -140,7 +142,7 @@ fires.
 Fired rules appear at the **top** of the injected brief as a
 `SYNTHESIS (cumulative cost)` section, before any individual tripwire
 detail. The math is shown explicitly so the agent sees
-`2.4 + 7.25 + 10.0 = 19.65pp >= 5.0pp` rather than three separate bullet
+`3.0 + 2.0 + 4.0 = 9.0 pts >= 5.0 pts` rather than three separate bullet
 points.
 
 Partial matches work: if only 2 of 3 components are active but the sum
@@ -314,7 +316,8 @@ between `inject` events and subsequent tool calls.
 - **`cortex stats --sessions` effectiveness report**: new section shows
   per-tripwire `hits / violations / rate` with OK/WARN/FAIL status. Rate
   near 0 = lesson applied, rate > 0.5 = lesson ignored.
-- **Seeded 2 patterns**: `lookahead_parquet` and `real_entry_price`.
+- **Several seeded patterns**: e.g. `secrets_in_logs`, `lookahead_parquet`,
+  `migration_destructive`, `auth_token_in_url`, `force_push_main_blocked`.
   Tripwires without patterns can still be injected; they just don't
   contribute to effectiveness measurement. Authoring patterns is optional.
 
@@ -458,7 +461,7 @@ Each draft is a JSON file with:
 
 - `draft_id`: unique identifier (auto-generated as
   `<source>_<timestamp>_<uuid6>` to avoid collisions)
-- `source`: provenance tag (`manual`, `palace_polymarket`, `dmn_haiku`)
+- `source`: provenance tag (`manual`, `palace_<wing>`, `dmn_haiku`)
 - `created_at`: ISO timestamp
 - `draft`: the tripwire fields themselves
 
@@ -582,10 +585,10 @@ accumulates drafts while we watch what accrues.
 ### Day 17 — Cost-weighted LTD pruning (deferred)
 
 "Use it or lose it" auto-archival, with a hard constraint: NEVER
-auto-demote `severity` based purely on violation count. The
-`poly_fee_empirical` tripwire cost $500 on one occurrence; its
-`violation_count` may stay low forever and still be worth keeping
-critical. Safe formulation:
+auto-demote `severity` based purely on violation count. A tripwire
+that prevents one $500 production incident may stay low-frequency
+forever and still be worth keeping at critical severity. Safe
+formulation:
 
 - A tripwire is a candidate for archival if:
   `cost_usd < 50 AND days_since_last_match > 30 AND hits_ever < 3`
@@ -600,7 +603,7 @@ high-value / low-frequency lessons.
 ### Day 18+ — Auto-mutation of YAML triggers (may never ship)
 
 This is the Day-9 failure mode waiting to happen. DMN observes
-"`r_poly_backtest` fired on a session where it was irrelevant" and
+"`r_some_rule` fired on a session where it was irrelevant" and
 wants to add `not_any: ["summary"]`. Auto-writing to
 `cortex/rules/*.yml` here is exactly how auto-regex overfit on Day 9.
 

@@ -19,7 +19,6 @@ from cortex.promoter import PromoterDecision
 from cortex.promoter_prompt import build_classification_prompt
 from cortex.store import CortexStore
 
-
 # ---- Decider fixtures ----
 
 

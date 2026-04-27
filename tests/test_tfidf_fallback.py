@@ -28,56 +28,59 @@ def test_tokens_drops_cyrillic_keeps_latin():
 
 def test_score_tripwire_prefers_triggers():
     tw = {
-        "triggers": ["poly", "fee"],
-        "title": "Polymarket fee empirical",
-        "body": "some text mentioning backtests",
+        "triggers": ["secret", "log"],
+        "title": "redact secret tokens before logging",
+        "body": "some text mentioning aggregators and headers",
     }
-    # 'fee' in triggers -> 3.0
-    assert score_tripwire({"fee"}, tw) == 3.0
-    # 'empirical' in title -> 3.0
-    assert score_tripwire({"empirical"}, tw) == 3.0
-    # 'backtests' in body only -> 1.0
-    assert score_tripwire({"backtests"}, tw) == 1.0
+    # 'secret' in triggers -> 3.0
+    assert score_tripwire({"secret"}, tw) == 3.0
+    # 'redact' in title -> 3.0
+    assert score_tripwire({"redact"}, tw) == 3.0
+    # 'aggregators' in body only -> 1.0
+    assert score_tripwire({"aggregators"}, tw) == 1.0
     # unrelated
-    assert score_tripwire({"nothing"}, tw) == 0.0
+    assert score_tripwire({"unrelated"}, tw) == 0.0
 
 
 def test_score_tripwire_takes_highest_location(tmp_path):
     """If the same token appears in triggers AND body, count it once at
     the highest weight."""
     tw = {
-        "triggers": ["fee"],
-        "title": "fee",
-        "body": "fee mentioned in body too",
+        "triggers": ["secret"],
+        "title": "secret",
+        "body": "secret mentioned in body too",
     }
-    # 'fee' is in triggers (3.0), title (3.0), body (1.0) -- count as trigger only
-    assert score_tripwire({"fee"}, tw) == 3.0
+    # 'secret' in triggers (3.0), title (3.0), body (1.0) -- count once at 3.0
+    assert score_tripwire({"secret"}, tw) == 3.0
 
 
-def test_fallback_search_finds_pnl_tripwires(tmp_path):
+def test_fallback_search_finds_secret_tripwires(tmp_path):
     store = _seeded_store(tmp_path)
     try:
-        # Both poly_fee_empirical and real_entry_price have 'pnl' in triggers
-        hits = fallback_search("user wants to see pnl for a trade", store)
+        # secrets_in_logs has 'secret' / 'token' in triggers
+        hits = fallback_search(
+            "user wants to log a secret token for debugging", store,
+        )
     finally:
         store.close()
     ids = {h["id"] for h in hits}
-    assert "poly_fee_empirical" in ids or "real_entry_price" in ids
+    assert "secrets_in_logs" in ids
 
 
 def test_fallback_search_mixed_russian_english_prompt(tmp_path):
-    """The exact prompt that failed in earlier testing: Russian context
-    with 'pnl' as the only English token."""
+    """A Russian-context prompt with a single English keyword still has
+    to fire if that keyword matches a seeded trigger."""
     store = _seeded_store(tmp_path)
     try:
-        hits = fallback_search("покажи топ фичи по pnl для poly", store)
+        hits = fallback_search("покажи где логируется token и password", store)
     finally:
         store.close()
-    assert len(hits) > 0, "fallback should fire on 'pnl + poly' even in Cyrillic context"
+    assert len(hits) > 0, (
+        "fallback should fire on 'token + password' even in Cyrillic context"
+    )
     ids = {h["id"] for h in hits}
-    # Both tripwires with pnl in triggers should surface
-    assert "poly_fee_empirical" in ids
-    assert "real_entry_price" in ids
+    # secrets_in_logs has both token and password in its triggers.
+    assert "secrets_in_logs" in ids
 
 
 def test_fallback_search_trivial_prompt_returns_empty(tmp_path):
@@ -93,7 +96,7 @@ def test_fallback_search_respects_top_k(tmp_path):
     store = _seeded_store(tmp_path)
     try:
         hits = fallback_search(
-            "poly backtest fee maker pnl signal",
+            "production deploy backtest config secret token",
             store,
             top_k=2,
         )
@@ -105,7 +108,11 @@ def test_fallback_search_respects_top_k(tmp_path):
 def test_fallback_search_sorts_by_score_then_severity(tmp_path):
     store = _seeded_store(tmp_path)
     try:
-        hits = fallback_search("poly pnl backtest fee maker", store, top_k=5)
+        hits = fallback_search(
+            "production deploy backtest config secret token",
+            store,
+            top_k=5,
+        )
     finally:
         store.close()
     scores = [h["_fallback_score"] for h in hits]
@@ -126,8 +133,8 @@ def test_render_brief_empty_returns_empty():
 
 def test_render_brief_contains_source_marker():
     tw = {
-        "id": "poly_fee_empirical",
-        "title": "Polymarket fee",
+        "id": "secrets_in_logs",
+        "title": "Never log secrets",
         "severity": "critical",
         "cost_usd": 500.0,
         "body": "line1\nline2\nline3",
@@ -135,7 +142,7 @@ def test_render_brief_contains_source_marker():
     }
     out = render_fallback_brief([tw])
     assert 'source="keyword_fallback"' in out
-    assert "poly_fee_empirical" in out
+    assert "secrets_in_logs" in out
     assert "CRITICAL" in out
     assert "match score 6.0" in out
     assert "[past cost $500.00]" in out

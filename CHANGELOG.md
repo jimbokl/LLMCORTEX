@@ -1,6 +1,81 @@
 # Cortex changelog
 
-## 0.1.0 — unreleased
+## 0.2.0 — production seed cleanup
+
+**Stripped the original Polymarket-research seed and replaced it with a
+generic engineering example set.** The shape of every Cortex feature is
+unchanged — tripwires, rules, cost components, synthesis, verifier,
+violation patterns, affected_files, shadow lifecycle — only the example
+content swaps. Existing custom tripwires in user stores are unaffected;
+re-running `cortex migrate` only adds / upserts the new example rows.
+
+### Seed (`cortex/importers/memory_md.py`)
+
+Nine generic example tripwires, drawn from common software-engineering
+incident patterns:
+
+- `secrets_in_logs` — never log secrets / tokens / passwords (with
+  regex `violation_patterns`)
+- `migration_destructive` — DROP COLUMN/TABLE in migrations is
+  irreversible; use the two-deploy pattern (with regex + affected_files
+  for migration paths)
+- `lookahead_parquet` — features must be computable strictly before
+  decision time (with `verify_cmd` = `cortex-check-lookahead`)
+- `backtest_must_match_prod` — staging / backtest config must match
+  prod
+- `never_single_strategy` — no SPOFs on critical paths
+- `no_budget_paper` — never apply prod caps to paper / shadow runs
+- `auth_token_in_url` — auth tokens leak via access logs and Referer
+- `feature_flag_default_off` — new feature flags default OFF
+- `force_push_main_blocked` — never force-push main / master
+
+Three cost components and one synthesis rule (`prod_deploy_unsafe`)
+demonstrate the cumulative-risk composition: a deploy task that hits
+`feature_flag_default_off + backtest_must_match_prod +
+never_single_strategy` synthesizes to 9 pts of unmitigated deploy risk
+above a 5 pts floor.
+
+### Rules (`cortex/rules/generic.yml`)
+
+Replaced the original Polymarket-specific ruleset with nine generic
+rules covering the new example tripwires: `prod_deploy`, `db_migration`,
+`feature_pipeline_work`, `backtest_vs_prod_match`, `paper_eval_config`,
+`security_logging`, `auth_url_handling`, `git_force_push`,
+`prod_param_change`. Removed `cortex/rules/polymarket.yml`.
+
+### Code cleanup
+
+- `cortex/dmn.py` — placeholder JSON schema in the Haiku reflection
+  prompt now uses `"domain": "your_domain_here"` instead of a hard-coded
+  domain.
+- `cortex/cli.py` — `cortex import-palace --wing` defaults to `default`
+  instead of a hard-coded wing name.
+- `cortex/bench.py` — canned test prompts switched to deploy / backtest
+  / security examples that exercise the new rules and seed.
+- `cortex/watch.py` — replaced two `try / except / pass` blocks with
+  `contextlib.suppress(Exception)` for clarity.
+- `cortex/cli.py` — modernized `isinstance(x, (int, float))` to PEP-604
+  union form `isinstance(x, int | float)`.
+
+### Docs
+
+- README, BENCHMARKS, `docs/architecture.md`, `docs/authoring.md`,
+  `docs/hooks.md` rewritten so every example uses generic
+  software-engineering tripwires (deploy safety, migrations, security
+  logging, ML lookahead) instead of the original trading-research
+  examples. The synthesis demo number changes from `19.65pp` to
+  `9.0 pts`; everything else is identical in shape.
+- Removed `docs/blog/2026-04-11-the-36x-ratio.md` (project-history
+  blog post tied to the original research domain).
+
+### Tests
+
+407 tests pass against the new seed and rules. Test fixtures that
+referenced removed tripwire ids were updated to use the new example
+ids; test prompts were updated to match the new rule vocabulary.
+`ruff check` is clean across `cortex/` and `tests/`.
+
+## 0.1.0 — initial release
 
 Initial working version shipped over 4 iteration days.
 
@@ -323,7 +398,8 @@ logging still runs, hook still exits 0. Verified by
 - Foreign keys on + WAL journal mode + idempotent UPSERT preserving
   violation stats across re-migrations
 - CLI: `init`, `migrate`, `list`, `show`, `find`, `stats`, `add`
-- Importer with 11 seed tripwires distilled from BOTWA `MEMORY.md`
+- Importer with 11 seed tripwires distilled from a real-world
+  development project's `MEMORY.md`
 - 19 tests
 
 ### Day 2 — classifier + hook
@@ -459,13 +535,14 @@ bodies) doesn't crash the CLI with cp1251 encoding errors.
   `verify_cmd: "cortex-check-lookahead --features-dir DETECTOR"` as a
   working Day 7 example. Gracefully no-ops when `DETECTOR/` doesn't exist
   in the current working directory.
-- **Live smoke test**: with `CORTEX_VERIFY_ENABLE=1`, matching a Polymarket
-  backtest prompt against the BOTWA POLY project correctly SKIPs
-  `poly_fee_empirical` (its `verify_cmd` starts with `BOT/` — not
-  allow-listed, because it would execute a real trade) and runs
-  `cortex-check-lookahead` against the live `POLY/DETECTOR/` folder,
-  producing `[OK] lookahead_parquet — OK: scanned DETECTOR, 0 lookahead
-  patterns found`. Allow-list saved a destructive command from auto-execution.
+- **Live smoke test**: with `CORTEX_VERIFY_ENABLE=1`, matching a
+  domain-specific backtest prompt against the original development
+  project correctly SKIPs a tripwire whose `verify_cmd` started with a
+  non-allow-listed binary (it would have executed a real trade) and
+  runs `cortex-check-lookahead` against the live features folder,
+  producing `[OK] lookahead_parquet — OK: scanned features, 0 lookahead
+  patterns found`. Allow-list saved a destructive command from
+  auto-execution.
 - +20 tests (127 total)
 
 ### Test coverage
@@ -537,9 +614,9 @@ session audit logs that proposes new tripwires to the inbox.
   WITHOUT making an API call. Essential for reviewing prompt quality
   before paying for tokens.
 - **Live dry-run verified** on 17 sessions / 1067 events from real
-  BOTWA session history. The prompt includes all 13 existing tripwires,
-  top injected tripwire counts (29x poly_fee_empirical, 25x
-  real_entry_price, etc.), and a complete JSON schema example.
+  development-project session history. The prompt includes every
+  existing tripwire, top injected tripwire counts, and a complete JSON
+  schema example.
 - **Mock-tested end-to-end**: 19 tests in `test_dmn.py` cover
   session summary / prompt building / proposal parsing (clean / code-fenced
   / prosed / malformed) / Haiku client via dependency injection / inbox
@@ -677,8 +754,8 @@ machinery now has a data-driven authoring path.
   Plus a break-even token impact analysis.
 - **`cortex bench`** CLI: `--iterations N`, `--no-subprocess`, `--json`.
 - **[BENCHMARKS.md](BENCHMARKS.md)**: full report with real numbers from
-  the live BOTWA store. Headline: `classify_prompt` p50 = 6.3 ms,
-  end-to-end hook subprocess p50 = 59.3 ms, avg brief ≈ 1250 tokens,
+  the live development store. Headline: `classify_prompt` p50 ≈ 6 ms,
+  end-to-end hook subprocess p50 ≈ 60 ms, avg brief ≈ 1250 tokens,
   break-even at 1 prevented mistake per 2 injections.
 - **README FAQ updated** to cite measured numbers (was: hand-waved
   `<20 ms` claim; now: specific percentiles from the bench output).
@@ -725,17 +802,17 @@ Day-9 DMN proposals from the Haiku reflection loop.
 
 ### Day 7 post-prep — public release housekeeping
 
-- Removed hardcoded BOTWA Palace path from `cli.py`; `cortex import-palace`
-  now reads `$CORTEX_PALACE_PATH` env var, exits with a clear message if
-  missing. Wing also reads `$CORTEX_PALACE_WING` env var.
+- Removed hardcoded development-project Palace path from `cli.py`;
+  `cortex import-palace` now reads `$CORTEX_PALACE_PATH` env var, exits
+  with a clear message if missing. Wing also reads `$CORTEX_PALACE_WING`
+  env var.
 - Added `LICENSE` (MIT)
 - Added `CONTRIBUTING.md` with tripwire/rule/pattern authoring rules,
   fail-open contract, PR checklist
 - Added `.github/workflows/ci.yml`: pytest + ruff on Python 3.10 / 3.11 / 3.12
-- Added README badges and a disclaimer framing the 13 seed tripwires as
-  concrete working examples from the Polymarket project rather than
-  universal defaults
-- Changed `pyproject.toml` `authors` from `BOTWA` to `Cortex contributors`
+- Added README badges and a disclaimer framing the seed tripwires as
+  concrete working examples rather than universal defaults
+- Set `pyproject.toml` `authors` to `Cortex contributors`
 
 This is the first commit that can be published to a public GitHub repo
 without leaking private paths or domain-specific defaults.

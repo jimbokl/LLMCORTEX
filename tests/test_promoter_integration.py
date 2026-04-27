@@ -8,16 +8,14 @@ of `promoter.classify_pair` so no network request ever happens.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from cortex import promoter
 from cortex.cli import main as cli_main
-from cortex.session import log_event, read_session
+from cortex.session import read_session
 from cortex.store import CortexStore
-
 
 # ---- fixtures ----
 

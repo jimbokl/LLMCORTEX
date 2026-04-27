@@ -55,7 +55,7 @@ def test_hook_match_emits_additional_context(monkeypatch):
         db = str(Path(tmp) / "seed.db")
         run_migration(db)
         monkeypatch.setenv("CORTEX_DB", db)
-        prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+        prompt = "ship the new pricing release to production today"
         ret, out = _run_hook(json.dumps({"prompt": prompt}))
         assert ret == 0
         assert out, "hook should emit JSON for a matching prompt"
@@ -63,7 +63,7 @@ def test_hook_match_emits_additional_context(monkeypatch):
         assert payload["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
         ctx = payload["hookSpecificOutput"]["additionalContext"]
         assert "<cortex_brief" in ctx
-        assert "poly_fee_empirical" in ctx
+        assert "feature_flag_default_off" in ctx
 
 
 # ---------- Day 10: verifier blocking mode ----------
@@ -78,7 +78,7 @@ def test_hook_does_not_block_when_verify_block_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
     monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
 
-    prompt = "run a poly backtest on 5m slot data"
+    prompt = "run a backtest against the prod config before shipping"
     ret, out = _run_hook(json.dumps({"session_id": "t1", "prompt": prompt}))
     assert ret == 0  # never blocks when env vars are unset
 
@@ -92,7 +92,7 @@ def test_hook_does_not_block_when_verify_enable_set_but_block_unset(monkeypatch,
     monkeypatch.setenv("CORTEX_VERIFY_ENABLE", "1")
     monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
 
-    prompt = "run a poly backtest on 5m slot data"
+    prompt = "run a backtest against the prod config before shipping"
     ret, _out = _run_hook(json.dumps({"session_id": "t2", "prompt": prompt}))
     assert ret == 0  # verifier ran but we never block without BLOCK=1
 
@@ -125,7 +125,7 @@ def test_hook_blocks_on_verifier_fail_when_block_enabled(monkeypatch, tmp_path):
 
     monkeypatch.setattr(_vr, "run_verifiers_for", _fake_run)
 
-    prompt = "run a poly backtest on 5m slot data"
+    prompt = "run a backtest against the prod config before shipping"
     ret, out = _run_hook(json.dumps({"session_id": "t3", "prompt": prompt}))
     assert ret == 2  # blocked
     # Brief still emitted so the user sees why
@@ -157,7 +157,7 @@ def test_hook_does_not_block_when_verifier_passes(monkeypatch, tmp_path):
 
     monkeypatch.setattr(_vr, "run_verifiers_for", _fake_pass)
 
-    prompt = "run a poly backtest on 5m slot data"
+    prompt = "run a backtest against the prod config before shipping"
     ret, _out = _run_hook(json.dumps({"session_id": "t4", "prompt": prompt}))
     assert ret == 0  # passed -> no block
 
@@ -173,9 +173,9 @@ def test_hook_shadow_tripwire_not_injected_but_logged(monkeypatch, tmp_path):
 
     db = str(tmp_path / "seed.db")
     run_migration(db)
-    # Demote one of the critical poly_backtest_task targets to shadow.
+    # Demote one of the critical prod_deploy targets to shadow.
     s = CortexStore(db)
-    s.set_status("real_entry_price", "shadow")
+    s.set_status("force_push_main_blocked", "shadow")
     s.close()
 
     monkeypatch.setenv("CORTEX_DB", db)
@@ -183,22 +183,22 @@ def test_hook_shadow_tripwire_not_injected_but_logged(monkeypatch, tmp_path):
     monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
     monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
 
-    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    prompt = "ship the new pricing release to production today"
     ret, out = _run_hook(json.dumps({"session_id": "sh_sess", "prompt": prompt}))
     assert ret == 0
     assert out, "hook should still emit active brief"
     payload = json.loads(out)
     ctx = payload["hookSpecificOutput"]["additionalContext"]
     # Active tripwires still render.
-    assert "poly_fee_empirical" in ctx
+    assert "feature_flag_default_off" in ctx
     # The shadowed one must NOT appear in the visible brief.
-    assert "real_entry_price" not in ctx
+    assert "force_push_main_blocked" not in ctx
 
     events = read_session("sh_sess")
     kinds = [e["event"] for e in events]
     assert "shadow_hit" in kinds
     shadow_ev = next(e for e in events if e["event"] == "shadow_hit")
-    assert "real_entry_price" in shadow_ev["tripwire_ids"]
+    assert "force_push_main_blocked" in shadow_ev["tripwire_ids"]
 
 
 def test_hook_all_shadow_falls_through_to_fallback(monkeypatch, tmp_path):
@@ -210,13 +210,13 @@ def test_hook_all_shadow_falls_through_to_fallback(monkeypatch, tmp_path):
 
     db = str(tmp_path / "seed.db")
     run_migration(db)
-    # Nuke every active poly_backtest_task target to shadow.
+    # Nuke every active prod_deploy target to shadow.
     s = CortexStore(db)
     for tw_id in (
-        "poly_fee_empirical",
-        "lookahead_parquet",
-        "real_entry_price",
+        "feature_flag_default_off",
         "backtest_must_match_prod",
+        "never_single_strategy",
+        "force_push_main_blocked",
     ):
         s.set_status(tw_id, "shadow")
     s.close()
@@ -226,7 +226,7 @@ def test_hook_all_shadow_falls_through_to_fallback(monkeypatch, tmp_path):
     monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
     monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
 
-    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    prompt = "ship the new pricing release to production today"
     ret, _out = _run_hook(json.dumps({"session_id": "all_sh", "prompt": prompt}))
     assert ret == 0
     events = read_session("all_sh")
@@ -293,7 +293,7 @@ def test_git_diff_failure_is_fail_open(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     # Keyword-only match on the seeded rules must still fire.
-    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    prompt = "ship the new pricing release to production today"
     ret, out = _run_hook(json.dumps({"session_id": "tier14b", "prompt": prompt}))
     assert ret == 0
     assert out, "keyword match must still emit brief despite git failure"
@@ -340,7 +340,7 @@ def test_hook_no_shadow_hit_event_when_only_active(monkeypatch, tmp_path):
     monkeypatch.delenv("CORTEX_VERIFY_BLOCK", raising=False)
     monkeypatch.delenv("CORTEX_VERIFY_ENABLE", raising=False)
 
-    prompt = "run replay_basis_arb.py to backtest binance lead on 5m poly slots"
+    prompt = "ship the new pricing release to production today"
     ret, _out = _run_hook(json.dumps({"session_id": "clean", "prompt": prompt}))
     assert ret == 0
     kinds = [e["event"] for e in read_session("clean")]

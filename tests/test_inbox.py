@@ -157,7 +157,7 @@ def test_validate_draft_todo_placeholders():
         "id": "TODO_set_id",
         "title": "TODO one-line summary",
         "severity": "medium",
-        "domain": "polymarket",
+        "domain": "infra",
         "triggers": ["TODO", "extract"],
         "body": "TODO rule statement",
     }

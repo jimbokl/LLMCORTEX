@@ -13,12 +13,13 @@ def test_seed_has_no_duplicate_ids():
 def test_seed_has_required_tripwires():
     ids = {tw["id"] for tw in SEED_TRIPWIRES}
     required = {
-        "poly_fee_empirical",
+        "secrets_in_logs",
+        "migration_destructive",
         "lookahead_parquet",
-        "directional_5m_dead",
-        "real_entry_price",
-        "never_single_strategy",
         "backtest_must_match_prod",
+        "never_single_strategy",
+        "feature_flag_default_off",
+        "force_push_main_blocked",
     }
     assert required.issubset(ids)
 
@@ -34,10 +35,11 @@ def test_seed_fields_are_valid():
         assert tw["title"], f"{tw['id']}: empty title"
 
 
-def test_poly_fee_has_verify_cmd():
-    fee_tw = next(tw for tw in SEED_TRIPWIRES if tw["id"] == "poly_fee_empirical")
-    assert fee_tw["verify_cmd"] is not None
-    assert fee_tw["severity"] == "critical"
+def test_lookahead_has_verify_cmd():
+    """At least one seed tripwire ships with a verify_cmd to exercise that path."""
+    tw = next(t for t in SEED_TRIPWIRES if t["id"] == "lookahead_parquet")
+    assert tw["verify_cmd"] is not None
+    assert tw["severity"] == "critical"
 
 
 def test_run_migration_is_idempotent():
@@ -59,13 +61,13 @@ def test_migration_preserves_violations_on_rerun():
         run_migration(db)
         store = CortexStore(db)
         try:
-            store.record_violation(tripwire_id="poly_fee_empirical", evidence="test")
+            store.record_violation(tripwire_id="secrets_in_logs", evidence="test")
         finally:
             store.close()
         run_migration(db)  # re-migrate
         store = CortexStore(db)
         try:
-            tw = store.get_tripwire("poly_fee_empirical")
+            tw = store.get_tripwire("secrets_in_logs")
             assert tw["violation_count"] == 1
         finally:
             store.close()
@@ -77,8 +79,8 @@ def test_find_by_triggers_on_seeded_store():
         run_migration(db)
         store = CortexStore(db)
         try:
-            hits = store.find_by_triggers(["poly", "fee"])
+            hits = store.find_by_triggers(["log", "token"])
             ids = {h["id"] for h in hits}
-            assert "poly_fee_empirical" in ids
+            assert "secrets_in_logs" in ids
         finally:
             store.close()

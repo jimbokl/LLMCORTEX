@@ -124,21 +124,21 @@ def test_detect_violations_skips_honest_shift(tmp_path, monkeypatch):
     assert violations == []
 
 
-def test_detect_violations_matches_0_50_entry(tmp_path, monkeypatch):
+def test_detect_violations_matches_secrets_in_logs(tmp_path, monkeypatch):
     monkeypatch.setenv("CORTEX_SESSIONS_DIR", str(tmp_path / "sessions"))
     db = _seeded_store(tmp_path)
     monkeypatch.setenv("CORTEX_DB", db)
 
-    log_event("sess_entry", "inject", {
-        "matched_rules": ["poly_backtest_task"],
-        "tripwire_ids": ["real_entry_price"],
+    log_event("sess_secret", "inject", {
+        "matched_rules": ["security_logging"],
+        "tripwire_ids": ["secrets_in_logs"],
         "synthesis_ids": [],
     })
 
-    bug_snippet = "entry_price = 0.5"
-    violations = detect_violations("sess_entry", "Edit", bug_snippet)
+    bug_snippet = 'logger.debug(f"got token={user.api_key}")'
+    violations = detect_violations("sess_secret", "Edit", bug_snippet)
     assert len(violations) == 1
-    assert violations[0]["tripwire_id"] == "real_entry_price"
+    assert violations[0]["tripwire_id"] == "secrets_in_logs"
 
 
 def test_detect_violations_no_inject_means_no_detect(tmp_path, monkeypatch):
@@ -172,12 +172,12 @@ def test_detect_violations_one_per_tripwire(tmp_path, monkeypatch):
 
     log_event("sess_multi", "inject", {
         "matched_rules": ["r"],
-        "tripwire_ids": ["real_entry_price"],
+        "tripwire_ids": ["migration_destructive"],
         "synthesis_ids": [],
     })
 
-    # Two patterns of real_entry_price would both match this
-    bug_snippet = "entry = 0.5 and up_ask = 0.5"
+    # Multiple destructive patterns on the same tripwire count once.
+    bug_snippet = "ALTER TABLE accounts DROP COLUMN legacy_id; DROP TABLE old_t;"
     violations = detect_violations("sess_multi", "Edit", bug_snippet)
     assert len(violations) == 1
 

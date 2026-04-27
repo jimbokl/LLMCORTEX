@@ -55,7 +55,7 @@ Claude Code sends a JSON object on the hook's stdin. Relevant fields for
 {
   "session_id": "a4d5a9e9-abc3-49ed-8585-fc9e9673cf66",
   "hook_event_name": "UserPromptSubmit",
-  "cwd": "/c/code/BOTWA",
+  "cwd": "/path/to/your/project",
   "prompt": "user's message text"
 }
 ```
@@ -113,8 +113,8 @@ as `.cortex/` exists at the project root.
 ```jsonl
 {"at": "2026-04-11T09:26:04Z", "event": "tool_call", "tool_name": "Edit"}
 {"at": "2026-04-11T09:26:08Z", "event": "tool_call", "tool_name": "Bash"}
-{"at": "2026-04-11T10:49:56Z", "event": "inject", "matched_rules": ["poly_directional_5m"], "tripwire_ids": ["poly_fee_empirical", "real_entry_price"], "synthesis_ids": ["pm_5m_directional_block"]}
-{"at": "2026-04-11T11:02:11Z", "event": "keyword_fallback", "n_hits": 3, "tripwire_ids": ["real_entry_price", "poly_fee_empirical", "backtest_must_match_prod"], "scores": [6.0, 4.0, 3.0]}
+{"at": "2026-04-11T10:49:56Z", "event": "inject", "matched_rules": ["prod_deploy"], "tripwire_ids": ["feature_flag_default_off", "backtest_must_match_prod"], "synthesis_ids": ["prod_deploy_unsafe"]}
+{"at": "2026-04-11T11:02:11Z", "event": "keyword_fallback", "n_hits": 3, "tripwire_ids": ["secrets_in_logs", "backtest_must_match_prod", "never_single_strategy"], "scores": [6.0, 4.0, 3.0]}
 ```
 
 ### Event types

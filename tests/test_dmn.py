@@ -45,8 +45,8 @@ def test_build_session_summary_with_activity(tmp_path, monkeypatch):
     run_migration(db)
 
     log_event("s1", "inject", {
-        "matched_rules": ["poly_backtest_task"],
-        "tripwire_ids": ["poly_fee_empirical", "real_entry_price"],
+        "matched_rules": ["prod_deploy"],
+        "tripwire_ids": ["feature_flag_default_off", "backtest_must_match_prod"],
         "synthesis_ids": [],
     })
     log_event("s1", "tool_call", {"tool_name": "Bash", "input_snippet": "echo"})
@@ -55,7 +55,7 @@ def test_build_session_summary_with_activity(tmp_path, monkeypatch):
     s = build_session_summary(days=7, db_path=db)
     assert s["n_sessions"] == 1
     assert s["sessions_with_inject"] == 1
-    assert ("poly_fee_empirical", 1) in s["top_tripwires_hit"]
+    assert ("feature_flag_default_off", 1) in s["top_tripwires_hit"]
     # Cold = every seeded tripwire minus the 2 that were hit in this test.
     from cortex.importers.memory_md import SEED_TRIPWIRES
     assert len(s["cold_tripwires"]) == len(SEED_TRIPWIRES) - 2
@@ -73,7 +73,7 @@ def test_build_existing_tripwires_summary(tmp_path):
     assert len(existing) == len(SEED_TRIPWIRES)
     assert all("id" in tw and "title" in tw for tw in existing)
     ids = {tw["id"] for tw in existing}
-    assert "poly_fee_empirical" in ids
+    assert "secrets_in_logs" in ids
 
 
 # ---- build_prompt ----
@@ -88,22 +88,27 @@ def test_build_prompt_contains_required_sections():
         "sessions_with_fallback": 9,
         "sessions_silent": 0,
         "n_silent_violations": 1,
-        "top_tripwires_hit": [("poly_fee_empirical", 14)],
-        "top_rules_hit": [("poly_backtest_task", 3)],
+        "top_tripwires_hit": [("secrets_in_logs", 14)],
+        "top_rules_hit": [("security_logging", 3)],
         "top_tools": [("Bash", 169)],
-        "cold_tripwires": ["book_holography_failed"],
+        "cold_tripwires": ["force_push_main_blocked"],
     }
     existing = [
-        {"id": "poly_fee_empirical", "title": "...", "severity": "critical", "domain": "polymarket"},
+        {
+            "id": "secrets_in_logs",
+            "title": "...",
+            "severity": "critical",
+            "domain": "security",
+        },
     ]
     prompt = build_prompt(summary, existing, max_proposals=3)
 
     assert "Existing tripwires" in prompt
-    assert "poly_fee_empirical" in prompt
+    assert "secrets_in_logs" in prompt
     assert "Recent session activity" in prompt
     assert "last 7 days" in prompt
     assert "Bash" in prompt
-    assert "book_holography_failed" in prompt
+    assert "force_push_main_blocked" in prompt
     assert "up to 3 NEW tripwires" in prompt
     assert "JSON array" in prompt
     assert '"id"' in prompt  # schema shown
@@ -266,8 +271,8 @@ def test_run_reflection_end_to_end_with_mock_client(tmp_path, monkeypatch):
 
     # Log some activity so the summary isn't empty
     log_event("s1", "inject", {
-        "matched_rules": ["poly_backtest_task"],
-        "tripwire_ids": ["poly_fee_empirical"],
+        "matched_rules": ["security_logging"],
+        "tripwire_ids": ["secrets_in_logs"],
         "synthesis_ids": [],
     })
 
@@ -275,7 +280,7 @@ def test_run_reflection_end_to_end_with_mock_client(tmp_path, monkeypatch):
         "id": "proposed_from_haiku",
         "title": "Haiku-proposed tripwire",
         "severity": "high",
-        "domain": "polymarket",
+        "domain": "your_domain_here",
         "triggers": ["foo", "bar", "baz"],
         "body": "Rule. Why: evidence. How to apply: (1). (2).",
         "evidence": "observed pattern X in session s1",
@@ -371,7 +376,7 @@ def test_render_report_with_proposals():
                 "id": "proposed_x",
                 "title": "A new tripwire",
                 "severity": "high",
-                "domain": "polymarket",
+                "domain": "your_domain_here",
                 "triggers": ["a", "b"],
             },
         ],
