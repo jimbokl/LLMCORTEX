@@ -1,0 +1,36 @@
+VetCore Support
+
+Help for VetCore: pet bloodwork, local records, source files and veterinarian handoff packets.
+
+Contact
+
+Email: mmotorin@gmail.com
+
+Please include your iPhone model, iOS version, VetCore app version and a short description of what happened. Do not send pet medical records, source PDFs or photos unless you intentionally choose to share them for support.
+
+Common questions
+
+Do I need an account?
+No. The current VetCore build supports local use without a forced account. On first launch, you can choose Add later to inspect the app before creating a pet profile.
+
+Where are my records stored?
+VetCore stores pet profiles, records, source files, photos, reminder preferences and exports locally on your device unless you choose to share or export them.
+
+How do I export records?
+Use the in-app export and share actions for the local vault, passport, visit packets and other owner-held handoff files. Exports are created on device.
+
+Can VetCore diagnose my pet?
+No. VetCore is not a veterinarian and does not diagnose, treat, prescribe, recommend medication doses, prescribe diets, triage emergencies or replace professional veterinary care. Use it to organize records and prepare questions for your veterinarian.
+
+How do I delete local data?
+Use the in-app Settings and Local Data tools to export, restore or remove local records. iOS can also remove app data if you delete the app from the device.
+
+Emergency care
+
+If your pet may need urgent care, contact a veterinarian, emergency clinic or local emergency service. VetCore can organize records, but it does not provide emergency medical decisions.
+
+Legal owner
+
+VetCore is provided by Dmitriy Motorin. Public domain: https://jimbokl.github.io/LLMCORTEX/vetcore.
+
+Copyright 2026 Dmitriy Motorin.

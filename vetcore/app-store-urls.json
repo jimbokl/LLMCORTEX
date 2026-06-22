@@ -1,0 +1,22 @@
+{
+  "status": "host-ready",
+  "app": {
+    "display_name": "VetCore",
+    "bundle_id": "com.jimbokl.petvetos",
+    "version": "0.1",
+    "build": "1"
+  },
+  "expected_live_urls": {
+    "marketing_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/app-store-page.json",
+    "privacy_policy_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/privacy-policy.json",
+    "support_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/support-page.json"
+  },
+  "public_contact": {
+    "legal_entity": "Dmitriy Motorin",
+    "support_email": "mmotorin@gmail.com"
+  },
+  "notes": [
+    "The .json URLs are the App Store Connect fallback URLs because the current host serves HTML and text pages with HTTP 403 while serving JSON, CSS and PNG assets publicly.",
+    "HTML pages remain in the pack for future hosting fixes."
+  ]
+}

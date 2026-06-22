@@ -1,0 +1,33 @@
+{
+  "title": "VetCore Support",
+  "summary": "Help for VetCore: pet bloodwork, local records, source files and veterinarian handoff packets.",
+  "contact": {
+    "supportEmail": "mmotorin@gmail.com",
+    "instructions": "Please include your iPhone model, iOS version, VetCore app version and a short description of what happened. Do not send pet medical records, source PDFs or photos unless you intentionally choose to share them for support."
+  },
+  "questions": [
+    {
+      "question": "Do I need an account?",
+      "answer": "No. The current VetCore build supports local use without a forced account. On first launch, you can choose Add later to inspect the app before creating a pet profile."
+    },
+    {
+      "question": "Where are my records stored?",
+      "answer": "VetCore stores pet profiles, records, source files, photos, reminder preferences and exports locally on your device unless you choose to share or export them."
+    },
+    {
+      "question": "How do I export records?",
+      "answer": "Use the in-app export and share actions for the local vault, passport, visit packets and other owner-held handoff files. Exports are created on device."
+    },
+    {
+      "question": "Can VetCore diagnose my pet?",
+      "answer": "No. VetCore is not a veterinarian and does not diagnose, treat, prescribe, recommend medication doses, prescribe diets, triage emergencies or replace professional veterinary care. Use it to organize records and prepare questions for your veterinarian."
+    },
+    {
+      "question": "How do I delete local data?",
+      "answer": "Use the in-app Settings and Local Data tools to export, restore or remove local records. iOS can also remove app data if you delete the app from the device."
+    }
+  ],
+  "emergencyCare": "If your pet may need urgent care, contact a veterinarian, emergency clinic or local emergency service. VetCore can organize records, but it does not provide emergency medical decisions.",
+  "legalOwner": "VetCore is provided by Dmitriy Motorin. Public domain: https://jimbokl.github.io/LLMCORTEX/vetcore.",
+  "copyright": "Copyright 2026 Dmitriy Motorin."
+}

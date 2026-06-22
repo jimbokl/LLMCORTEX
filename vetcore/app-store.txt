@@ -1,0 +1,20 @@
+VetCore - Pet Records and Bloodwork
+
+VetCore is a local-first iOS app for pet bloodwork, veterinary records and owner-held handoff packets.
+
+Owners can keep pet profiles, lab rows, source files, photos, vaccine proof, body weight context, reminders and exports together on device. VetCore keeps source files beside structured records so owners can prepare better questions and cleaner handoff packets for a veterinarian.
+
+Core posture:
+- no forced account for local use;
+- no ads;
+- source-preserved records;
+- owner-initiated exports;
+- local-first storage in the current build.
+
+VetCore does not diagnose, treat, prescribe, recommend medication doses, prescribe diets, triage emergencies or replace professional veterinary care. It organizes owner-held records and veterinarian handoff context.
+
+Support: mmotorin@gmail.com
+Privacy policy: https://jimbokl.github.io/LLMCORTEX/vetcore/privacy.txt
+Support page: https://jimbokl.github.io/LLMCORTEX/vetcore/support.txt
+
+Copyright 2026 Dmitriy Motorin.

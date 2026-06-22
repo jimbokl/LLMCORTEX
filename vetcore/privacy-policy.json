@@ -1,0 +1,29 @@
+{
+  "title": "VetCore Privacy Policy",
+  "lastUpdated": "June 21, 2026",
+  "summary": "VetCore is designed as a local-first iOS app. In the current build, VetCore does not require an account for local use, does not show ads, does not include analytics or crash reporting SDKs, does not track users and does not use a cloud sync service.",
+  "dataStoredOnDevice": [
+    "Pet profile details, such as name, species, breed, age, weight, sex, microchip, clinic and contact labels.",
+    "Health record details, such as lab rows, vaccine proof, visit notes, medication or food context and body weight history.",
+    "Source files, such as PDFs, images, portal screenshots, vaccine receipts and label photos.",
+    "Pet photos and photo evidence the owner adds.",
+    "Local reminder preferences and reminder audit events.",
+    "Local export history, such as generated packet filenames, timestamps and hashes."
+  ],
+  "dataCollection": "In the current build, Dmitriy Motorin does not collect personal data from VetCore through a remote server. Records are kept in the local app vault unless the owner chooses to export or share them using iOS share, Files, Mail, Messages or another destination outside VetCore.",
+  "permissions": [
+    "Camera: to capture pet photos, lab reports or veterinary records on device.",
+    "Photo library: to import existing pet photos, lab report photos or owner-selected images.",
+    "Files: to import owner-selected PDFs, images or documents.",
+    "Notifications: to schedule quiet local medication, refill or vet-visit preparation reminders."
+  ],
+  "sharingAndExports": "VetCore can generate owner-held exports, PDFs, source manifests and share text. Sharing is initiated by the owner. Once data is shared to another app, service, clinic, caregiver or person, that destination handles the data under its own policies.",
+  "healthInformation": "VetCore organizes owner-provided records, source ranges, context and questions for veterinarian handoff. It does not diagnose, treat, prescribe, recommend medication doses, prescribe diets, triage emergencies or replace professional veterinary care.",
+  "children": "VetCore is not directed to children under 13. The app is intended for pet owners or caregivers who manage pet records.",
+  "changes": "If this policy changes, the updated version will be posted at https://jimbokl.github.io/LLMCORTEX/vetcore/privacy-policy.json with a new last-updated date.",
+  "contact": {
+    "legalEntity": "Dmitriy Motorin",
+    "supportEmail": "mmotorin@gmail.com"
+  },
+  "copyright": "Copyright 2026 Dmitriy Motorin."
+}
