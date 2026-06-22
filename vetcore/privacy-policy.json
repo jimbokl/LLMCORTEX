@@ -20,7 +20,7 @@
   "sharingAndExports": "VetCore can generate owner-held exports, PDFs, source manifests and share text. Sharing is initiated by the owner. Once data is shared to another app, service, clinic, caregiver or person, that destination handles the data under its own policies.",
   "healthInformation": "VetCore organizes owner-provided records, source ranges, context and questions for veterinarian handoff. It does not diagnose, treat, prescribe, recommend medication doses, prescribe diets, triage emergencies or replace professional veterinary care.",
   "children": "VetCore is not directed to children under 13. The app is intended for pet owners or caregivers who manage pet records.",
-  "changes": "If this policy changes, the updated version will be posted at https://jimbokl.github.io/LLMCORTEX/vetcore/privacy-policy.json with a new last-updated date.",
+  "changes": "If this policy changes, the updated version will be posted at https://jimbokl.github.io/LLMCORTEX/vetcore/privacy.html with a new last-updated date.",
   "contact": {
     "legalEntity": "Dmitriy Motorin",
     "supportEmail": "mmotorin@gmail.com"

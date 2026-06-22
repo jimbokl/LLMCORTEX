@@ -11,8 +11,8 @@
   "description": "Owners can keep pet profiles, lab rows, source files, photos, vaccine proof, body weight context, reminders and exports together on device. VetCore keeps source files beside structured records so owners can prepare better questions and cleaner handoff packets for a veterinarian.",
   "medicalDisclaimer": "VetCore does not diagnose, treat, prescribe, recommend medication doses, prescribe diets, triage emergencies or replace professional veterinary care. It organizes owner-held records and veterinarian handoff context.",
   "links": {
-    "privacyPolicy": "https://jimbokl.github.io/LLMCORTEX/vetcore/privacy-policy.json",
-    "support": "https://jimbokl.github.io/LLMCORTEX/vetcore/support-page.json"
+    "privacyPolicy": "https://jimbokl.github.io/LLMCORTEX/vetcore/privacy.html",
+    "support": "https://jimbokl.github.io/LLMCORTEX/vetcore/support.html"
   },
   "contact": {
     "supportEmail": "mmotorin@gmail.com",

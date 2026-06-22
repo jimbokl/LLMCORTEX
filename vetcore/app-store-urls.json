@@ -7,9 +7,9 @@
     "build": "1"
   },
   "expected_live_urls": {
-    "marketing_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/app-store-page.json",
-    "privacy_policy_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/privacy-policy.json",
-    "support_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/support-page.json"
+    "marketing_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/index.html",
+    "privacy_policy_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/privacy.html",
+    "support_url": "https://jimbokl.github.io/LLMCORTEX/vetcore/support.html"
   },
   "public_contact": {
     "legal_entity": "Dmitriy Motorin",
