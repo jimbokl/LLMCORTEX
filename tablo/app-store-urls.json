@@ -1,0 +1,15 @@
+{
+  "status": "host-ready",
+  "app": {
+    "displayName": "Tablo",
+    "appStoreId": "6784296933",
+    "bundleId": "com.jimbokl.metapdf",
+    "platforms": ["iPhone", "iPad"]
+  },
+  "urls": {
+    "marketingUrl": "https://jimbokl.github.io/LLMCORTEX/tablo/index.html",
+    "supportUrl": "https://jimbokl.github.io/LLMCORTEX/tablo/support.html",
+    "privacyPolicyUrl": "https://jimbokl.github.io/LLMCORTEX/tablo/privacy.html"
+  },
+  "scope": "Static App Store support, privacy, and app-information pages only; no web product surface."
+}
